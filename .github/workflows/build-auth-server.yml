@@ -30,10 +30,6 @@ jobs:
         working-directory: auth-server/
         run: |
           # Construct .env file
-          echo "$WORKFLOW_DISPATCH_APP_PRIVATE_KEY" > private-key-pkcs1.pem
-          openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out src/config/secret-workflow-dispatch-app-private-key.pem # PKCS8
-          rm -f private-key-pkcs1.pem
-
           echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_ID=${AUTH_APP_CLIENT_ID}" > .env
           echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET=${AUTH_APP_CLIENT_SECRET}" >> .env
           echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY=\"${AUTH_APP_CLIENT_PRIVATE_KEY}\"" >> .env
