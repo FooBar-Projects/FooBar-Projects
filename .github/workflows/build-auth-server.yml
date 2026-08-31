@@ -58,16 +58,16 @@ jobs:
           set +o history
           echo "$AUTH_SERVER_DEPLOY_SSH_PRIVATE_KEY" > .id_deploy
           set -o history
-          # Note: copy binary to temp path rather than overwriting binary.
-          # If old binary is running in systemd service, its contents are
-          # locked and cannot be overwritten by scp.
+          # Note: copy binary to staging path rather than overwriting
+          # existing binary. If existing binary is running in systemd service,
+          # its contents are locked and cannot be overwritten by scp.
           scp -o UserKnownHostsFile=.known_hosts -i .id_deploy foobar-projects-auth-server "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}:/opt/foobar-projects/foobar-projects-auth-server.staged"
           scp -o UserKnownHostsFile=.known_hosts -i .id_deploy .env "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
 
           # Restart auth server on VM
           # (e.g., delete old binary's hard link, move new binary in its place,
           # then restart systemd service)
-          ssh -o UserKnownHostsFile=.known_hosts -i .id_deploy "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}" "bash /opt/foobar-projects/restart-server.sh /opt/foobar-projects/foobar-projects-auth-server.staged"
+          ssh -o UserKnownHostsFile=.known_hosts -i .id_deploy "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}" "sudo /opt/foobar-projects/restart-server.sh /opt/foobar-projects/foobar-projects-auth-server.staged"
 
           # Delete deploy private key and known hosts
           rm -f .id_deploy .known_hosts
