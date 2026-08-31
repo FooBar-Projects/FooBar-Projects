@@ -1,0 +1,95 @@
+name: Build site and deploy to GH Pages
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    env:
+      PUBLIC_PATH: ${{ vars.PUBLIC_PATH }}
+      POLL_DELAY: ${{ vars.POLL_DELAY }}
+      BACKEND_REPO_OWNER: ${{ vars.BACKEND_REPO_OWNER }}
+      GITHUB_AUTH_CLIENT_ID: ${{ vars.GITHUB_AUTH_CLIENT_ID }}
+      GITHUB_AUTH_CLIENT_SECRET: ${{ secrets.GITHUB_AUTH_CLIENT_SECRET }}
+      GITHUB_AUTH_CLIENT_PRIVATE_KEY: ${{ secrets.GITHUB_AUTH_CLIENT_PRIVATE_KEY }}
+      GITHUB_OAUTH_REDIRECT_URI: ${{ vars.GITHUB_OAUTH_REDIRECT_URI }}
+      VM_EXTERNAL_HOSTNAME: ${{ vars.VM_EXTERNAL_HOSTNAME }}
+      VM_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.VM_DEPLOY_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Build static site
+        working-directory: web/static/
+        run: |
+          # Inject build vars into config/build.conf, which gets read by
+          # webpack.prod.js
+          mkdir -p config
+          echo "publicPath: '${PUBLIC_PATH}'" >> config/build.conf
+
+          # Inject application vars into src/config/conf.yaml.
+          mkdir -p src/config
+          echo "pollDelay: ${POLL_DELAY}" >> src/config/conf.yaml
+          echo "backendRepoOwner: '${BACKEND_REPO_OWNER}'" >> src/config/conf.yaml
+
+          # Build
+          npm i
+          npm run build
+          
+      - name: Upload static frontend files as pages artifact
+        id: deploy_static_site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/static/dist/
+
+      - name: Build webserver
+        working-directory: web/server/
+        run: |
+          # Construct .env file
+          echo "$WORKFLOW_DISPATCH_APP_PRIVATE_KEY" > private-key-pkcs1.pem
+          openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out src/config/secret-workflow-dispatch-app-private-key.pem # PKCS8
+          rm -f private-key-pkcs1.pem
+
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_ID=${GITHUB_AUTH_CLIENT_ID}" > .env
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET=${GITHUB_AUTH_CLIENT_SECRET}" >> .env
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY=\"${GITHUB_AUTH_CLIENT_PRIVATE_KEY}\"" >> .env
+          echo "FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI=${GITHUB_OAUTH_REDIRECT_URI}" >> .env
+          echo "FOOBAR_PROJECTS_STATIC_CONTENT_DIR=static/dist/" >> .env
+          
+          # Build webserver
+          GOOS=linux GOARCH=amd64 go build -o foobar-projects-webserver
+      
+      - name: Deploy webserver
+        working-directory: web/server/
+        run: |
+          # Copy webserver and .env file to VM
+          set +o history
+          echo "$VM_DEPLOY_SSH_PRIVATE_KEY" > .id_deploy
+          set -o history
+          scp -i .id_deploy foobar-projects-webserver "deploy@${VM_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
+          scp -i .id_deploy .env "deploy@${VM_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
+
+          # Copy static web frontend to VM
+          scp -i .id_deploy -r ../static/dist/ "deploy@${VM_EXTERNAL_HOSTNAME}:/opt/foobar-projects/static/"
+
+          # Restart webserver systemd service on VM
+          ssh -i .id_deploy "deploy@${VM_EXTERNAL_HOSTNAME}" "sudo /usr/bin/systemctl restart foobar-projects-webserver.service"
+
+  deploy-static-site:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy_static_site.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

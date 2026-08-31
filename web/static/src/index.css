@@ -1,0 +1,77 @@
+@import url('~@/css/title.css');
+@import url('~@/css/progress.css');
+@import url('~@/css/error.css');
+
+#viewport-container {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+}
+
+#status-content-container {
+	flex-grow: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+}
+
+.content-container {
+	margin-left: auto;
+	margin-right: auto;
+	display: none;
+}
+
+.loader-container {
+	width: 5%;
+	min-width: 3rem;
+	aspect-ratio: 1;
+	margin-left: auto;
+	margin-right: auto;
+	margin-bottom: 1rem;
+}
+          
+.status-text-container {
+	margin-bottom: 1rem;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.status-text{
+	text-align: center;
+	display: none;
+}
+
+.status-text.status-text-visible {
+	display: block;
+}
+
+/*
+ * Modified from #1 at https://css-loaders.com/glowing/
+ */
+.loader {
+  width: 100%;
+  max-width: 70vw;
+  aspect-ratio: 1;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 10px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  position: relative;
+  mask: conic-gradient(#000 0 0) content-box exclude,conic-gradient(#000 0 0);
+  filter: blur(12px);
+}
+.loader:before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-conic-gradient(#0000 0 5%,#C02942,#0000 20% 50%);
+  animation: l2 1.5s linear infinite;
+}
+@keyframes l2 {
+  to {rotate: 1turn}
+}

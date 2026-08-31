@@ -1,0 +1,174 @@
+name: Securely dispatch workflow by opening issue
+
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  securely-dispatch-workflow:
+    if: startsWith(github.event.issue.title, '[securely-dispatch-workflow]')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    env:
+      CLASSROOMS_USERNAME: ${{ vars.CLASSROOMS_USERNAME }}
+      CLASSROOMS_REPO_PLATFORM: ${{ vars.CLASSROOMS_REPO_PLATFORM || 'github' }}
+      CLASSROOMS_REPO: ${{ vars.CLASSROOMS_REPO }}
+      STUDENT_PLATFORM: ${{ vars.STUDENT_PLATFORM || 'github' }}
+      STUDENT_PLATFORM_GIT_HOSTNAME: ${{ vars.STUDENT_PLATFORM_GIT_HOSTNAME }}
+      STUDENT_ASSIGNMENT_ORGANIZATION: ${{ vars.STUDENT_ASSIGNMENT_ORGANIZATION }}
+      ASSIGNMENT_CREATION_USERNAME: ${{ vars.ASSIGNMENT_CREATION_USERNAME }}
+      ASSIGNMENT_CREATION_APP_ID: ${{ vars.ASSIGNMENT_CREATION_APP_ID }}
+      ASSIGNMENT_CREATION_APP_INSTALLATION_ID: ${{ vars.ASSIGNMENT_CREATION_APP_INSTALLATION_ID }}
+      ASSIGNMENT_CREATION_APP_PRIVATE_KEY: ${{ secrets.ASSIGNMENT_CREATION_APP_PRIVATE_KEY }}
+      CLASSROOMS_APP_ID: ${{ vars.CLASSROOMS_APP_ID }}
+      CLASSROOMS_APP_INSTALLATION_ID: ${{ vars.CLASSROOMS_APP_INSTALLATION_ID }}
+      CLASSROOMS_APP_PRIVATE_KEY: ${{ secrets.CLASSROOMS_APP_PRIVATE_KEY }}
+      CLASSROOM_RSA_PRIVATE_KEY: ${{ secrets.CLASSROOM_RSA_PRIVATE_KEY }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_EVENT_ISSUE_BODY: ${{ github.event.issue.body }}
+      GITHUB_EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          path: 'repo'
+
+      - name: Install workflow util dependencies
+        working-directory: 'repo/workflow-util'
+        run: |
+          npm i
+
+      - name: Securely dispatch workflow
+        run: |
+          # Defaults for environment variables
+          if [[ "$CLASSROOMS_REPO" == "" ]]
+          then
+              export CLASSROOMS_REPO="github.com/$GITHUB_REPOSITORY.git"
+          fi
+
+          if [[ "$STUDENT_PLATFORM_GIT_HOSTNAME" == "" && "$STUDENT_PLATFORM" == "github" ]]
+          then
+              export STUDENT_PLATFORM_GIT_HOSTNAME="github.com"
+          fi
+
+          if [[ "$CLASSROOMS_REPO_PLATFORM" == "github" ]]
+          then
+              export CLASSROOMS_USERNAME="x-access-token"
+              export ASSIGNMENT_CREATION_USERNAME="x-access-token"
+          fi
+          
+          # TODO more defaults for env vars, and error-handle for missing
+          # required vars / secrets
+          
+          # Use node script to decode issue body and decrypt via
+          # CLASSROOM_RSA_PRIVATE_KEY
+          WORKFLOW_INPUTS_JSON=$(node repo/workflow-util/decodeissuebody.js --data="$GITHUB_EVENT_ISSUE_BODY")
+
+          # Export WORKFLOW_INPUTS_JSON so that target event handler can parse
+          # its remaining per-handler inputs
+          export WORKFLOW_INPUTS_JSON
+
+          # Parse event name, verifier, result encryption key, and user access
+          # token if it exists (should always be provided except for in
+          # auth handlers)
+          EVENT_NAME=$(echo "$WORKFLOW_INPUTS_JSON" | jq -r '.eventName')
+          VERIFIER=$(echo "$WORKFLOW_INPUTS_JSON" | jq -r '.verifier')
+          RESULT_ENCRYPTION_KEY=$(echo "$WORKFLOW_INPUTS_JSON" | jq -r '.resultEncryptionKey')
+          USER_ACCESS_TOKEN=$(echo "$WORKFLOW_INPUTS_JSON" | jq -rj '.userAccessToken | if . != null then . else "" end')
+
+          # Mask user access token in logs
+          if [[ "$USER_ACCESS_TOKEN" != "" ]]
+          then
+              echo "::add-mask::$USER_ACCESS_TOKEN"
+          fi
+
+          # Export user access token so that it can be accessed by handlers
+          # that need it
+          export USER_ACCESS_TOKEN
+          
+          # Convert result encryption key from base64url to regular base64
+          RESULT_ENCRYPTION_KEY=$(echo -n "$RESULT_ENCRYPTION_KEY" | tr '_-' '/+')
+
+          # export RESULT_ENCRYPTION_KEY for encryption of issue
+          # comment and result payload
+          export RESULT_ENCRYPTION_KEY
+
+          # Prepare result directory
+          mkdir -p result
+          rm -rf result/*
+
+          function secureresult() {
+              zip -qr result.zip result/* # Zip result/* for encryption
+              rm -f result/* # Delete unzipped plaintext contents
+
+              # Encrypt result.zip. Generates result.zip.enc, aes-key.enc, and
+              # iv.bin in result/
+              node repo/workflow-util/secureresults.js --file=result.zip
+              
+              rm -f result.zip # Delete plaintext result.zip
+          }
+
+          # Dispatch target event handler
+          handler_file="repo/workflow-util/handlers/${EVENT_NAME}"
+          if [[ ! -r "$handler_file" ]]
+          then
+              # Error: Invalid event name. Notify dispatching client.
+              echo -n '{"status": "bad-event-name"}' > result/status.json
+              secureresult
+              exit 0
+          fi
+
+          # Execute handler script
+          if [[ "${EVENT_NAME}" == "gen-user-auth-tokens-github" || "${EVENT_NAME}" == "refresh-auth-tokens" ]]
+          then
+              # Auth scripts are source'd instead of subshell'd so that they
+              # can set this script's USER_ACCESS_TOKEN variable (and
+              # HANDLER_EXIT_CODE), which
+              # is then used to secure results
+              source "$handler_file"
+          else
+              bash "$handler_file"
+              HANDLER_EXIT_CODE="$?"
+          fi
+
+          if [[ "$HANDLER_EXIT_CODE" != 0 ]]
+          then
+              # Handler failed to write result/. Notify dispatching client.
+              echo -n '{"status": "handler-failed"}' > result/status.json
+          fi
+
+          # Generate issue comment so that dispatching client can poll
+          # workflow status
+          issue_comment=$(node repo/workflow-util/genissuecomment.js --runId="$GITHUB_RUN_ID" --verifier="$VERIFIER")
+          post_comment_status=$(curl -s -o curl.json -w "%{http_code}" -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${USER_ACCESS_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$GITHUB_EVENT_ISSUE_NUMBER/comments" \
+            -d '{"body":"'"$issue_comment"'"}')
+
+          if [[ "$post_comment_status" != "201" ]]
+          then
+              echo "Error: Got HTTP status $post_comment_status when posting issue comment" >&2
+              exit 1
+          fi
+          
+          # Secure result/ for sending to client as artifact
+          secureresult
+
+          exit 0
+
+      - name: Upload secure results
+        uses: actions/upload-artifact@v4
+        with:
+          name: result
+          path: result/
+          retention-days: 1

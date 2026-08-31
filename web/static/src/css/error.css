@@ -1,0 +1,38 @@
+.error-symbol-container {
+	width: 5%;
+	min-width: 3rem;
+	aspect-ratio: 1;
+	margin-left: auto;
+	margin-right: auto;
+	margin-bottom: 1rem;
+}
+
+.error-symbol {
+  width: 100%;
+  max-width: 70vw;
+  aspect-ratio: 1;
+  margin-left: auto;
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.error-symbol:before {
+  content: "\274C";
+  font-size: 2rem;
+}
+
+.error-status-text{
+	text-align: center;
+}
+
+.error-bar-container {
+	border-radius: 0.3rem;
+	border: thin solid red;
+	height: 1.2rem;
+	width: 13rem;
+	margin-bottom: 1rem;
+	margin-left: auto;
+	margin-right: auto;
+}

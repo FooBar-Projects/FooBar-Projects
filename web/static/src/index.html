@@ -1,0 +1,44 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache" />
+    <title>Accept Assignment</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="content">
+      <div id="viewport-container">
+        <div id="status-content-container">
+          <div class="content-container" id="redirecting-content-container">Redirecting to GitHub for authentication...</div>
+          <div class="content-container" id="loading-content-container">
+            <h1 class="title" id="assignment-accept-title">&nbsp;</h1>
+            <div class="loader-container">
+              <div class="loader"></div>
+            </div>
+            <div class="progress-bar" id="loading-progress-bar">
+              <div class="progress-chunk"></div>
+              <div class="progress-chunk"></div>
+              <div class="progress-chunk"></div>
+            </div>
+            <div class="status-text-container" id="loading-status-text-container">
+              <div class="status-text status-text-visible">Dispatching workflow</div>
+              <div class="status-text">Waiting for workflow to complete</div>
+              <div class="status-text">Retreiving workflow results</div>
+              <div class="status-text">Redirecting to repository</div>
+            </div>
+          </div>
+          <div class="content-container" id="error-content-container">
+            <h1 class="title" id="error-title">Error</h1>
+            <div class="error-symbol-container">
+              <div class="error-symbol"></div>
+            </div>
+            <div class="error-bar-container"></div>
+            <div id="error-status-text" class="error-status-text">&nbsp;</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

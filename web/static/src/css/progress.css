@@ -1,0 +1,23 @@
+.progress-bar {
+	display: flex;
+	padding: 0;
+	height: 1.2rem;
+	width: 13rem;
+	margin-bottom: 1rem;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.progress-chunk {
+	height: 100%;
+	background-color: #8888ff55;
+	margin-left: 0.1rem;
+	margin-right: 0.1rem;
+	padding: 0;
+	flex: 1;
+	border-radius: 0.3rem;
+}
+
+.progress-chunk.progress-chunk-visible {
+	background-color: #8888ff;
+}

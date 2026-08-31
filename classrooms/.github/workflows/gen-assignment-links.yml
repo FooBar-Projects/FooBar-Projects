@@ -1,0 +1,55 @@
+name: Generate assignment accept links
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  gen-links:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    env:
+      WEB_FRONTEND_REPO_OWNER: ${{ vars.WEB_FRONTEND_REPO_OWNER || github.repository_owner }}
+      WEB_FRONTEND_REPO: ${{ vars.WEB_FRONTEND_REPO || 'web' }}
+      GH_TOKEN: ${{ github.token }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Gen Links
+        run: |
+          release_body=$'Accept links for all assignments:\n\n'
+          for assignment_directory in $(find assignments/ -mindepth 1 -maxdepth 1 -type d)
+          do
+            assignment_name=$(basename "$assignment_directory")
+            assignment_name=${assignment_name%/} # remove trailing slash
+
+            accept_link="https://${WEB_FRONTEND_REPO_OWNER}.github.io/${WEB_FRONTEND_REPO}/?assignment-name=${assignment_name}"
+
+            if [[ -r "assignments/assignments.conf" ]]
+            then
+              n_matching_assignments=$(cat assignments/assignments.conf | yq -o json '.[] | select(.name == "'"$assignment_name"'")' | jq -rjs 'length')
+              if [[ "$n_matching_assignments" -gt 0 ]]
+              then
+                assignment_accept_key=$(cat assignments/assignments.conf | yq -o json '.[] | select(.name == "'"$assignment_name"'")' | jq -rjs '.[0].key | if . == null then "" else . end')
+                if [[ "$assignment_accept_key" != "" ]]
+                then
+                  accept_link+="&assignment-accept-key=${assignment_accept_key}"
+                fi
+              fi
+            fi
+
+            release_body+="${assignment_name}: ${accept_link}"
+            release_body+=$'\n'
+          done
+
+          echo "$release_body"
+          
+          tag_name="v${{ github.run_number }}"
+          gh release create "$tag_name" \
+            --title "$tag_name" \
+            --notes "$release_body"

@@ -1,0 +1,270 @@
+#!/bin/bash
+
+ASSIGNMENT_NAME=$(echo "$WORKFLOW_INPUTS_JSON" | jq -r '.assignmentName')
+ASSIGNMENT_ACCEPT_KEY=$(echo "$WORKFLOW_INPUTS_JSON" | jq -r '.assignmentAcceptKey')
+
+# TODO verify required inputs are present
+
+# Convert app private keys to PKCS8 format, just in case webcrypto
+# doesn't play well with PKCS1 again in the future
+echo "$ASSIGNMENT_CREATION_APP_PRIVATE_KEY" > private-key-pkcs1.pem
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out assignment-creation-app-private-key.pem
+IFS= read -r -d '' ASSIGNMENT_CREATION_APP_PRIVATE_KEY < assignment-creation-app-private-key.pem || true
+export ASSIGNMENT_CREATION_APP_PRIVATE_KEY
+rm -f private-key-pkcs1.pem
+rm -f assignment-creation-app-private-key.pem
+
+echo "$CLASSROOMS_APP_PRIVATE_KEY" > private-key-pkcs1.pem
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out classrooms-app-private-key.pem
+IFS= read -r -d '' CLASSROOMS_APP_PRIVATE_KEY < classrooms-app-private-key.pem || true
+export CLASSROOMS_APP_PRIVATE_KEY
+rm -f private-key-pkcs1.pem
+rm -f classrooms-app-private-key.pem
+
+# Mask assignment accept key in logs
+echo "::add-mask::${ASSIGNMENT_ACCEPT_KEY}"
+
+# Git config
+git config --global user.name "Classroom Robot"
+git config --global user.email "<>"
+
+# Get user's GitHub username and construct student assignment repo
+# name
+get_user_status=$(curl -s -o curl.json -w "%{http_code}" -L \
+    -H "Authorization: Bearer ${USER_ACCESS_TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2026-03-10" \
+    https://api.github.com/user)
+
+if [[ "$get_user_status" == "401" ]]
+then
+    echo "Error: Failed authentication when retrieving user information" >&2
+    echo -n '{"status": "bad-auth"}' > result/status.json
+    exit 0
+elif [[ "$get_user_status" != "200" ]]
+then
+    echo "Error: Got HTTP status $get_user_status when retrieving user information" >&2
+    exit 1
+fi
+
+export STUDENT_USERNAME=$(cat curl.json | jq -r '.login')
+AUTHENTICATED_STUDENT_ID=$(cat curl.json | jq -r '.id')
+rm -f curl.json
+STUDENT_ASSIGNMENT_REPO="${ASSIGNMENT_NAME}-${STUDENT_USERNAME}"
+# Replace forbidden characters with hyphens
+export STUDENT_ASSIGNMENT_REPO=$(echo -n "$STUDENT_ASSIGNMENT_REPO" | sed 's/[^a-zA-Z0-9_\.-]/-/g')
+
+# Get installation access token for assignment creation app
+assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
+echo "::add-mask::${assignment_creation_app_installation_access_token}"
+
+# Check if student assignment repo already exists.
+get_remote_repo_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
+    -H "X-GitHub-Api-Version: 2026-03-10" \
+    "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}")
+
+if [[ "$get_remote_repo_status" == "404" ]]
+then
+    # Repo doesn't exist. Create it.
+
+    # Get installation access token for classrooms app
+    classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
+    echo "::add-mask::${classrooms_app_installation_access_token}"
+
+    # Clone classrooms repo
+    git clone --depth 1 "https://${CLASSROOMS_USERNAME}:${classrooms_app_installation_access_token}@${CLASSROOMS_REPO}" classrooms-repo
+
+    # Verify that the assignment to be accepted exists (either as a
+    # directory with contents or in config file)
+    assignment_exists=1
+    assignment_template_exists=1
+    if [[ ! -d "classrooms-repo/assignments/${ASSIGNMENT_NAME}" ]]
+    then
+        assignment_template_exists=0
+        if [[ ! -f "classrooms-repo/assignments/assignments.conf" ]]
+        then
+            assignment_exists=0
+        else
+            n_matching_assignments=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -s 'length')
+            if [[ "$n_matching_assignments" == 0 ]]
+            then
+                assignment_exists=0
+            fi
+        fi
+    fi
+
+    if [[ "$assignment_exists" == 0 ]]
+    then
+        # Assignment doesn't exist. Return error to client.
+        echo "Error: Assignment \"$ASSIGNMENT_NAME\" doesn't exist" >&2
+        echo -n '{"status": "unknown-assignment"}' > result/status.json
+        exit 0
+    fi
+
+    # Read assignment config
+    if [[ -f "classrooms-repo/assignments/assignments.conf" ]]
+    then
+        assignment_accept_key=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -rjs 'if (length > 0) and (.[0].key != null) then .[0].key else "" end')
+        assignment_student_role=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -rjs 'if (length > 0) and (.[0].student_role != null) then .[0].student_role else "" end')
+    fi
+
+    # Override missing config fields with defaults
+    if [[ "$assignment_student_role" == "" ]]
+    then
+        assignment_student_role="push"
+    fi
+
+    # Verify input key matches assignment's configured accept key
+    if [[ "$assignment_accept_key" != "" && "$assignment_accept_key" != "$ASSIGNMENT_ACCEPT_KEY" ]]
+    then
+        # Invalid assignment accept key. Return error to client.
+        echo "Error: Invalid assignment accept key \"$ASSIGNMENT_ACCEPT_KEY\" for assignment \"$ASSIGNMENT_NAME\"" >&2
+        echo -n '{"status": "invalid-key"}' > result/status.json
+        exit 0
+    fi
+
+    # Create remote student assignment repo
+    create_remote_repo_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
+        -X POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
+        -H "X-GitHub-Api-Version: 2026-03-10" \
+        "https://api.github.com/orgs/${STUDENT_ASSIGNMENT_ORGANIZATION}/repos" \
+        -d '{"name":"'"$STUDENT_ASSIGNMENT_REPO"'","description":"'"${STUDENT_USERNAME}'s"' repository for assignment '"$ASSIGNMENT_NAME"'","private":true}')
+
+    if [[ "$create_remote_repo_status" == "403" ]]
+    then
+        echo "Error: Authentication failed when generating student assignment repository" >&2
+        exit 1
+    elif [[ "$create_remote_repo_status" == "422" ]]
+    then
+        echo "Error: Got HTTP status 422 when generating assignment repository." >&2
+        exit 1
+    elif [[ "$create_remote_repo_status" != "201" ]]
+    then
+        echo "Error: Got HTTP status $create_remote_repo_status when generating student assignment repository" >&2
+        exit 1
+    fi
+
+    # If assignment template directory exists, then create local
+    # student assignment repo and push contents to remote
+    # repo
+    if [[ "$assignment_template_exists" == 1 ]]
+    then
+        mkdir -p "$STUDENT_ASSIGNMENT_REPO"
+        cp -R classrooms-repo/assignments/"$ASSIGNMENT_NAME"/* "$STUDENT_ASSIGNMENT_REPO"
+        (
+            cd "$STUDENT_ASSIGNMENT_REPO"
+            git init -b main
+            git add -A
+            git commit -m "Classroom Robot: Instantiate assignment"
+            remote_repo_git_url="https://${ASSIGNMENT_CREATION_USERNAME}:${assignment_creation_app_installation_access_token}@${STUDENT_PLATFORM_GIT_HOSTNAME}/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}.git"
+            git push "$remote_repo_git_url" main
+        )
+    fi
+elif [[ "$get_remote_repo_status" != "200" ]]
+then
+    # HTTP 200 means repo exists. 404 means it doesn't. Anything else
+    # is an error.
+    echo "Error: Got HTTP status $get_remote_repo_status when retrieving student assignment repository" >&2
+    exit 1
+fi
+
+# Check if student already has access to repository.
+get_collaborator_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${USER_ACCESS_TOKEN}" \
+    -H "X-GitHub-Api-Version: 2026-03-10" \
+    "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/collaborators/$STUDENT_USERNAME")
+if [[ "$get_collaborator_status" == "404" ]]
+then
+    # User is not a collaborator. We may need to add them, but first we have
+    # to check if this repo was previously created and registered under a
+    # different student's ID.
+    # Get STUDENT_ID repository variable if it exists
+    get_student_id_status=$(curl -s -o curl.json -w "%{http_code}" -L \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
+        -H "X-GitHub-Api-Version: 2026-03-10" \
+        "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/actions/variables/STUDENT_ID")
+    if [[ "$get_student_id_status" == 200 ]]
+    then
+        # Extract variable value from curl.json
+        STUDENT_ID=$(cat curl.json | jq -r '.value')
+    else
+        # Variable doesn't exist. Then the repo can be registered to this
+	# student. Create
+        # the STUDENT_ID variable using ID of current authenticated
+        # user.
+        STUDENT_ID="$AUTHENTICATED_STUDENT_ID"
+        create_student_id_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/actions/variables" \
+            -d '{"name":"STUDENT_ID","value":"'"$AUTHENTICATED_STUDENT_ID"'"}')
+        if [[ "$create_student_id_status" != 201 ]]
+        then
+            # Failed to create repo variable.
+            echo "Error: Got HTTP status $create_student_id_status when creating STUDENT_ID repository variable" >&2
+            exit 1
+        fi
+    fi
+    
+    # Verify that current authenticated user's ID matches that of student
+    # registered for repository
+    if [[ "$STUDENT_ID" != "$AUTHENTICATED_STUDENT_ID" ]]
+    then
+        # Wrong student. Should only happen if students' GitHub usernames
+        # change, so two students have the same username throughout the
+        # duration of a classroom's use. This repo was previously registered
+        # to a different student with this username.
+        # Fail with duplicate-username. Requires instructor to intervene
+        # and rename the old duplicate repository to something else.
+        echo "Error: Failed authentication when retrieving user information" >&2
+        echo -n '{"status": "duplicate-username"}' > result/status.json
+        exit 0
+    fi
+    
+    # Send invite to add student as outside collaborator for repo, or add
+    # as collaborator directly under certain conditions (e.g., if they're
+    # a member of the organization, or a member of a team that's already
+    # a collaborator)
+    add_collaborator_status=$(curl -L \
+        -s -o /dev/null -w "%{http_code}" \
+        -X PUT \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
+        -H "X-GitHub-Api-Version: 2026-03-10" \
+        "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/collaborators/${STUDENT_USERNAME}" \
+        -d '{"permission":"'"$assignment_student_role"'"}')
+
+    if [[ "$add_collaborator_status" == "403" ]]
+    then
+        echo "Error: Authentication failed when adding student as collaborator to their assignment repository" >&2
+        exit 1
+    elif [[ "$add_collaborator_status" != "204" && "$add_collaborator_status" != 201 ]]
+    then
+        # HTTP 204 (no content) means student was added directly
+        # as collaborator (no invite was needed), or they were
+        # already a collaborator. HTTP 201 means an invite was
+        # sent. Anything else is an error.
+        echo "Error: Got HTTP status $add_collaborator_status when adding student as collaborator to their assignment repository" >&2
+        exit 1
+    fi
+elif [[ "$get_collaborator_status" != "204" ]]
+then
+    # HTTP 204 means already a collaborator, 404 means not a
+    # collaborator. Anything else is an error.
+    echo "Error: Got HTTP status $get_collaborator_status when checking if student is a collaborator on their assignment repository" >&2
+    exit 1
+fi
+
+# Store result
+student_repository_url="https://${STUDENT_PLATFORM_GIT_HOSTNAME}/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}"
+echo -n '{"repositoryURL": "'"$student_repository_url"'"}' > result/data.json
+echo -n '{"status": "success"}' > result/status.json
+exit 0
