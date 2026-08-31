@@ -1,0 +1,63 @@
+name: Build auth server and deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    env:
+      AUTH_APP_CLIENT_ID: ${{ vars.AUTH_APP_CLIENT_ID }}
+      AUTH_APP_CLIENT_SECRET: ${{ secrets.AUTH_APP_CLIENT_SECRET }}
+      AUTH_APP_CLIENT_PRIVATE_KEY: ${{ secrets.AUTH_APP_CLIENT_PRIVATE_KEY }}
+      AUTH_APP_OAUTH_REDIRECT_URI: ${{ vars.AUTH_APP_OAUTH_REDIRECT_URI }}
+      AUTH_SERVER_PORT: ${{ vars.AUTH_SERVER_PORT || '443' }}
+      AUTH_SERVER_SSL_CERT_PATH: ${{ vars.AUTH_SERVER_SSL_CERT_PATH }}
+      AUTH_SERVER_SSL_KEY_PATH: ${{ vars.AUTH_SERVER_SSL_KEY_PATH }}
+      AUTH_SERVER_SSL_CERT_UPDATE_INTERVAL_MINUTES: ${{ vars.AUTH_SERVER_SSL_CERT_UPDATE_INTERVAL_MINUTES }}
+      AUTH_SERVER_EXTERNAL_HOSTNAME: ${{ vars.AUTH_SERVER_EXTERNAL_HOSTNAME }}
+      AUTH_SERVER_DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.AUTH_SERVER_DEPLOY_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      
+      - name: Build auth server
+        working-directory: auth-server/
+        run: |
+          # Construct .env file
+          echo "$WORKFLOW_DISPATCH_APP_PRIVATE_KEY" > private-key-pkcs1.pem
+          openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out src/config/secret-workflow-dispatch-app-private-key.pem # PKCS8
+          rm -f private-key-pkcs1.pem
+
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_ID=${AUTH_APP_CLIENT_ID}" > .env
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET=${AUTH_APP_CLIENT_SECRET}" >> .env
+          echo "FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY=\"${AUTH_APP_CLIENT_PRIVATE_KEY}\"" >> .env
+          echo "FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI=${AUTH_APP_OAUTH_REDIRECT_URI}" >> .env
+          echo "FOOBAR_PROJECTS_AUTH_SERVER_PORT=${AUTH_SERVER_PORT}" >> .env
+          echo "FOOBAR_PROJECTS_AUTH_SSL_CERT_PATH=\"${AUTH_SERVER_SSL_CERT_PATH}\"" >> .env
+          echo "FOOBAR_PROJECTS_AUTH_SSL_KEY_PATH=\"${AUTH_SERVER_SSL_KEY_PATH}\"" >> .env
+          echo "FOOBAR_PROJECTS_AUTH_SSL_CERT_UPDATE_INTERVAL_MINUTES=${AUTH_SERVER_SSL_CERT_UPDATE_INTERVAL_MINUTES}" >> .env
+          
+          # Build auth server
+          GOOS=linux GOARCH=amd64 go build -o foobar-projects-auth-server
+      
+      - name: Deploy auth server
+        working-directory: auth-server/
+        run: |
+          # Copy auth server binary and .env file to VM
+          set +o history
+          echo "$AUTH_SERVER_DEPLOY_SSH_PRIVATE_KEY" > .id_deploy
+          set -o history
+          scp -i .id_deploy foobar-projects-auth-server "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
+          scp -i .id_deploy .env "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
+
+          # Restart auth server systemd service on VM
+          ssh -i .id_deploy "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}" "sudo /usr/bin/systemctl restart foobar-projects-auth-server.service"
+
+          # Delete deploy private key
+          rm -f .id_deploy

@@ -1,4 +1,4 @@
-module foobar-projects-webserver
+module foobar-projects-auth-server
 
 go 1.27.0
 

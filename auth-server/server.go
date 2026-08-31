@@ -1029,7 +1029,6 @@ func main() {
 	githubOAuthRedirectURI := os.Getenv("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI")
 	networkInterface := os.Getenv("FOOBAR_PROJECTS_WEBSERVER_INTERFACE")
 	portString := os.Getenv("FOOBAR_PROJECTS_WEBSERVER_PORT")
-	staticContentDir := os.Getenv("FOOBAR_PROJECTS_STATIC_CONTENT_DIR")
 	sslCertPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_PATH")
 	sslKeyPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_KEY_PATH")
 	sslCertUpdateIntervalMinutesString := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_UPDATE_INTERVAL_MINUTES")
@@ -1056,7 +1055,7 @@ func main() {
 	}
 
 	if networkInterface == "" {
-		log.Print("FOOBAR_PROJECTS_WEBSERVER_INTERFACE is not set or is empty. Binding webserver to any / all available network interfaces.")
+		log.Print("FOOBAR_PROJECTS_WEBSERVER_INTERFACE is not set or is empty. Binding auth server to any / all available network interfaces.")
 	}
 
 	if portString == "" {
@@ -1073,10 +1072,6 @@ func main() {
 				portString,
 			),
 		)
-	}
-
-	if staticContentDir == "" {
-		log.Fatal("FOOBAR_PROJECTS_STATIC_CONTENT_DIR is not set or is empty")
 	}
 
 	if sslCertPath == "" {
@@ -1119,9 +1114,6 @@ func main() {
 	mux.HandleFunc("POST /access-token", handlerContext.accessTokenHandler)
 	mux.HandleFunc("POST /logout", handlerContext.logoutHandler)
 	mux.HandleFunc("GET /verify-installation", handlerContext.verifyInstallationHandler)
-
-	staticFileServer := http.FileServer(http.Dir(staticContentDir))
-	mux.Handle("GET /", staticFileServer)
 
 	sslCert, err := NewDynamicSSLCertificate(sslCertPath, sslKeyPath)
 	if err != nil {

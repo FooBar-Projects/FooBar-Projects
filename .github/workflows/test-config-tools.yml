@@ -1,0 +1,25 @@
+name: Run tests on config-tools/
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: ./config-tools
+        run: |
+          uv sync
+      - name: Test
+        working-directory: ./config-tools
+        run: |
+          uv run mypy --strict .

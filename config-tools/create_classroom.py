@@ -1011,27 +1011,24 @@ class ServerState:
         self.up = False
 
 
-MIN_PORT = 8000
-MAX_PORT = 8004
+PORT = 51423
 
 
 def start_server_thread_entry(server_state: ServerState) -> None:
     served = False
-    for port in range(MIN_PORT, MAX_PORT + 1):
-        try:
-            server_state.context.server_port = port
-            server = NotifyingServer(
-                ('localhost', port),
-                get_handler_class(server_state.context),
-                server_state
-            )
-            server_state.server = server
-            server.serve_forever()
-            served = True
-            break
-        except OSError:
-            server_state.context.server_port = None
-            server_state.server = None
+    try:
+        server_state.context.server_port = PORT
+        server = NotifyingServer(
+            ('localhost', PORT),
+            get_handler_class(server_state.context),
+            server_state
+        )
+        server_state.server = server
+        server.serve_forever()
+        served = True
+    except OSError:
+        server_state.context.server_port = None
+        server_state.server = None
 
     if not served:
         server_state.ready_event.set()

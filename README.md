@@ -2,7 +2,7 @@
 
 FooBar Projects is a free and open-source, lightweight, **self-hosted** (serverless) replacement for GitHub Classroom. It distributes programming assignments to students while keeping all the data under the ownership of the instructor.
 
-All data is stored, and backend operations are performed, within repositories under the classroom's GitHub Organization. The organization does not require a paid plan; a GitHub Free organization is sufficient. 
+All data is stored, and backend operations are performed, within repositories under the classroom's GitHub Organization. The organization does not require a paid plan; an organization on a GitHub Free plan is sufficient. 
 
 ## Setting up a classroom organization
 
@@ -27,7 +27,7 @@ A classroom's configuration, assignment configurations, and assignment templates
 
 ## Self-hosted runners
 
-FooBar Projects uses GitHub Actions workflows in the `backend-workflows` repository as a serverless backend. By default, these workflows run on GitHub-hosted runners (`ubuntu-latest`). Since these workflows execute for various semi-frequent user-facing operations (e.g., completing the OAuth flow, refreshing user access tokens, accepting assignments, etc), they can rack up a lot of GitHub Actions minutes, especially in large classes with many (e.g., hundreds of) students. GitHub Actions minutes are only free up to a certain per-organization limit depending on the organization's plan (2,000 minutes per month for Free plans; 3,000 for Team plans). Moreover, GitHub-hosted runners can be slow for a couple reasons: 1) there can sometimes be significant resource contention for GitHub-hosted runners, resulting in long pending times; and 2) GitHub-hosted runners are ephemeral with each job running in an isolated environment, which means they must reinstall all necessary dependencies (beyond what ships standard with the selected runner) at the start of each job execution.
+FooBar Projects uses GitHub Actions workflows in the `backend-workflows` repository as a serverless backend. By default, these workflows run on GitHub-hosted runners (`ubuntu-latest`). Since these workflows execute for some semi-frequent user-facing operations (e.g., accepting assignments), they can rack up a lot of GitHub Actions minutes, especially in large classes with many (e.g., hundreds of) students. GitHub Actions minutes are only free up to a certain per-organization limit depending on the organization's plan (2,000 minutes per month for Free plans; 3,000 for Team plans). Moreover, GitHub-hosted runners can be slow for a couple reasons: 1) there can sometimes be significant resource contention for GitHub-hosted runners, resulting in long pending times; and 2) GitHub-hosted runners are ephemeral with each job running in an isolated environment, which means they must reinstall all necessary dependencies (beyond what ships standard with the selected runner) at the start of each job execution.
 
 For these reasons, if possible, it's advised that instructors use one or more self-hosted runners for all workflows in the `backend-workflows` repository. This makes all backend operations within the classroom faster *and* free, regardless of the number of Actions minutes used (there's currently no limit to the number of free Actions minutes available for self-hosted runners, even on a GitHub Organization Free plan).
 
@@ -58,7 +58,9 @@ One final difference between Classroom 50 and FooBar Projects is that Classroom 
 
 Although FooBar Projects is mostly serverless, there's a small central proxy server that's used to conduct the OAuth flow. This is necessary since GitHub's OAuth web flow does not support public OAuth clients&mdash;only confidential clients&mdash;so a privileged server is required to manage the client secret. The server also verifies the installation of the central workflow dispatch app when setting up a new classroom organization.
 
-The auth proxy server's source code is available [here](web/server). It's possible for an instructor to host their own instance of the auth proxy server, but it requires a domain name, SSL certificates, a machine on which to host the server, and additional configuration.
+The auth proxy server's source code is available [here](auth-server/). It's possible for an instructor to host their own instance of the auth proxy server, but it requires a domain name, SSL certificates, a machine on which to host the server, and additional configuration.
+
+Note that a student's OAuth access tokens, retrieved and cached by the central auth proxy server, only have the necessary and sufficient permissions to write issues, read GitHub Actions resources, and read repository variables, and only within repositories on which the workflow dispatch app is installed (i.e., classrooms' `backend-workflows` repositories). In other words, although students' access tokens are handled centrally, these tokens do not have access to students' personal resources, and they're extremely limited in what they can do.
 
 ## Troubleshooting and FAQ
 
