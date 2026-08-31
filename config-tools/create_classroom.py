@@ -1035,9 +1035,8 @@ def start_server_thread_entry(server_state: ServerState) -> None:
 
 
 START_SERVER_ERROR_MESSAGE = (
-    f'Error: Failed to start server. Make sure there\'s an open '
-    f'port in the range [{MIN_PORT}, {MAX_PORT}] that isn\'t blocked by '
-    f'firewall rules.'
+    f'Error: Failed to start server. Make sure TCP port {PORT} is available '
+    f'and isn\'t blocked by firewall rules.'
 )
 
 
