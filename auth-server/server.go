@@ -1027,8 +1027,8 @@ func main() {
 	githubAuthClientSecret := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET")
 	githubAuthClientPrivateKey := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY")
 	githubOAuthRedirectURI := os.Getenv("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI")
-	networkInterface := os.Getenv("FOOBAR_PROJECTS_WEBSERVER_INTERFACE")
-	portString := os.Getenv("FOOBAR_PROJECTS_WEBSERVER_PORT")
+	networkInterface := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_INTERFACE")
+	portString := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_PORT")
 	sslCertPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_PATH")
 	sslKeyPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_KEY_PATH")
 	sslCertUpdateIntervalMinutesString := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_UPDATE_INTERVAL_MINUTES")
@@ -1055,12 +1055,12 @@ func main() {
 	}
 
 	if networkInterface == "" {
-		log.Print("FOOBAR_PROJECTS_WEBSERVER_INTERFACE is not set or is empty. Binding auth server to any / all available network interfaces.")
+		log.Print("FOOBAR_PROJECTS_AUTH_SERVER_INTERFACE is not set or is empty. Binding auth server to any / all available network interfaces.")
 	}
 
 	if portString == "" {
 		portString = "443"
-		log.Println("FOOBAR_PROJECTS_WEBSERVER_PORT is not set or is empty. " +
+		log.Println("FOOBAR_PROJECTS_AUTH_SERVER_PORT is not set or is empty. " +
 			"Defaulting to port 443.")
 	}
 
@@ -1068,7 +1068,7 @@ func main() {
 	if err != nil {
 		log.Fatal(
 			fmt.Sprintf(
-				"FOOBAR_PROJECTS_WEBSERVER_PORT has non-integer value %s",
+				"FOOBAR_PROJECTS_AUTH_SERVER_PORT has non-integer value %s",
 				portString,
 			),
 		)
