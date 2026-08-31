@@ -47,6 +47,8 @@ jobs:
         run: |
           # Copy auth server binary and .env file to VM
           set +o history
+          touch .id_deploy
+          chmod 0600 .id_deploy
           echo "$AUTH_SERVER_DEPLOY_SSH_PRIVATE_KEY" > .id_deploy
           set -o history
           scp -i .id_deploy foobar-projects-auth-server "deploy@${AUTH_SERVER_EXTERNAL_HOSTNAME}:/opt/foobar-projects/"
