@@ -273,6 +273,7 @@ type HandlerContext struct {
 	githubClientId string
 	githubClientSecret string
 	githubOAuthRedirectURI string
+	webFrontendOrigin string
 	sessionData SessionData
 	sharedJWT SharedJWT
 }
@@ -281,7 +282,8 @@ func NewHandlerContext(
 		githubClientId string,
 		githubClientSecret string,
 		githubClientPrivateKey *rsa.PrivateKey,
-		githubOAuthRedirectURI string) HandlerContext {
+		githubOAuthRedirectURI string,
+		webFrontendOrigin string) HandlerContext {
 	
 	return HandlerContext{
 		client: &http.Client{
@@ -290,6 +292,7 @@ func NewHandlerContext(
 		githubClientId: githubClientId,
 		githubClientSecret: githubClientSecret,
 		githubOAuthRedirectURI: githubOAuthRedirectURI,
+		webFrontendOrigin: webFrontendOrigin,
 		sessionData: *NewSessionData(),
 		sharedJWT: SharedJWT{
 			privateKey: githubClientPrivateKey,
@@ -566,6 +569,9 @@ type AccessTokenResponse struct {
 // /access-token endpoint (client provides session cookie and retrieves
 // the access token associated with their session, refreshed if appropriate).
 func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Request) {
+	// CORS header
+	w.Header().Set("Access-Control-Allow-Origin", h.webFrontendOrigin)
+
 	// Get session token cookie
 	sessionTokenCookie, err := r.Cookie("session_token")
 	if err != nil {
@@ -1027,6 +1033,7 @@ func main() {
 	githubAuthClientSecret := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET")
 	githubAuthClientPrivateKey := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY")
 	githubOAuthRedirectURI := os.Getenv("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI")
+	webFrontendOrigin := os.Getenv("FOOBAR_PROJECTS_WEB_FRONTEND_ORIGIN")
 	networkInterface := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_INTERFACE")
 	portString := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_PORT")
 	sslCertPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_PATH")
@@ -1052,6 +1059,10 @@ func main() {
 
 	if githubOAuthRedirectURI == "" {
 		log.Fatal("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI is not set or is empty")
+	}
+
+	if webFrontendOrigin == "" {
+		log.Fatal("FOOBAR_PROJECTS_WEB_FRONTEND_ORIGIN is not set or is empty")
 	}
 
 	if networkInterface == "" {
@@ -1106,6 +1117,7 @@ func main() {
 		githubAuthClientSecret,
 		jwtSignKey,
 		githubOAuthRedirectURI,
+		webFrontendOrigin,
 	)
 	go handlerContext.PurgeExpiredSessionsLoop()
 
