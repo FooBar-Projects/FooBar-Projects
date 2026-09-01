@@ -15,6 +15,7 @@ jobs:
       PUBLIC_PATH: ${{ vars.PUBLIC_PATH }}
       WEB_WORKFLOW_DISPATCH_POLL_DELAY: ${{ vars.WEB_WORKFLOW_DISPATCH_POLL_DELAY }}
       BACKEND_REPO_OWNER: ${{ vars.BACKEND_REPO_OWNER }}
+      AUTH_SERVER_EXTERNAL_HOSTNAME: ${{ vars.AUTH_SERVER_EXTERNAL_HOSTNAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -30,6 +31,7 @@ jobs:
           mkdir -p src/config
           echo "pollDelay: ${WEB_WORKFLOW_DISPATCH_POLL_DELAY}" >> src/config/conf.yaml
           echo "backendRepoOwner: '${BACKEND_REPO_OWNER}'" >> src/config/conf.yaml
+          echo "authServerExternalHostname: '${AUTH_SERVER_EXTERNAL_HOSTNAME}'" >> src/config/conf.yaml
 
           # Build
           npm i

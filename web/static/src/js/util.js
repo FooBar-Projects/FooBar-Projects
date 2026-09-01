@@ -1,6 +1,8 @@
 import { App } from 'octokit';
 import JSZip from 'jszip';
 
+import siteConfig from '@/config/conf.yaml'
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function setCookie(name, value, path, maxAgeSeconds, sameSite, allowInsecure) {
@@ -484,7 +486,7 @@ export async function dispatchWorkflowViaIssue(organizationName, workflowEventNa
 export async function getAccessToken() {
     // Request access token using HTTP-only session token cookie
     const getAccessTokenResponse = await fetch(
-        '/access-token',
+        `https://${siteConfig.authServerExternalHostname}/access-token`,
         {
             method: 'POST'
         }
