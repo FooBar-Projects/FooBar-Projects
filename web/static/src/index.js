@@ -81,7 +81,7 @@ async function authenticate() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(body),
-            credentials: 'same-origin'
+            credentials: 'include'
         }
     );
     

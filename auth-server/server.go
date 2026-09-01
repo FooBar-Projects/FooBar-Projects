@@ -497,15 +497,34 @@ type StartSessionResponseBody struct {
 	OAuthLoginURI string `json:"oauth_login_uri"`
 }
 
+func (h *HandlerContext) cors(w http.ResponseWriter, r *http.Request, methods string, headers string, allowCredentials bool) {
+	h.conditionallyAllowFrontendOrigin(w, r)
+	w.Header().Set("Access-Control-Allow-Methods", methods)
+	w.Header().Set("Access-Control-Allow-Headers", headers)
+	if allowCredentials {
+		w.Header().Set("Access-Control-Credentials", "true")
+	}
+}
+
+func (h *HandlerContext) corsPreflightTerminator(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Max-Age", "86400")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HandlerContext) startSessionCORS(w http.ResponseWriter, r *http.Request) {
+	h.cors(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
+}
+
 func (h *HandlerContext) startSessionCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
-	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
+	h.startSessionCORS(w, r)
+	h.corsPreflightTerminator(w, r)
 }
 
 // /start-session endpoint (establishes session, including state + pkce code
 // verifier, and redirects user to GitHub OAuth login page)
 func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Request) {
-	// CORS header
-	h.conditionallyAllowFrontendOrigin(w, r)
+	// CORS headers
+	h.startSessionCORS(w, r)
 
 	// Verify Content-Type header
 	contentType := r.Header.Get("Content-Type")
@@ -597,26 +616,20 @@ type AccessTokenResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
-func (h *HandlerContext) corsPreflightHandler(w http.ResponseWriter, r *http.Request, methods string, headers string, allowCredentials bool) {
-	h.conditionallyAllowFrontendOrigin(w, r)
-	w.Header().Set("Access-Control-Allow-Methods", methods)
-	w.Header().Set("Access-Control-Allow-Headers", headers)
-	w.Header().Set("Access-Control-Max-Age", "86400")
-	if allowCredentials {
-		w.Header().Set("Access-Control-Credentials", "true")
-	}
-	w.WriteHeader(http.StatusNoContent)
+func (h *HandlerContext) accessTokenCORS(w http.ResponseWriter, r *http.Request) {
+	h.cors(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
 }
 
 func (h *HandlerContext) accessTokenCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
-	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
+	h.accessTokenCORS(w, r)
+	h.corsPreflightTerminator(w, r)
 }
 
 // /access-token endpoint (client provides session cookie and retrieves
 // the access token associated with their session, refreshed if appropriate).
 func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Request) {
-	// CORS header
-	h.conditionallyAllowFrontendOrigin(w, r)
+	// CORS headers
+	h.accessTokenCORS(w, r)
 
 	// Get session token cookie
 	sessionTokenCookie, err := r.Cookie("session_token")

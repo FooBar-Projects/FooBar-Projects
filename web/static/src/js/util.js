@@ -488,7 +488,8 @@ export async function getAccessToken() {
     const getAccessTokenResponse = await fetch(
         `https://${siteConfig.authServerExternalHostname}/access-token`,
         {
-            method: 'POST'
+            method: 'POST',
+            credentials: 'include'
         }
     );
     if (getAccessTokenResponse.status == 401) {
