@@ -502,7 +502,7 @@ func (h *HandlerContext) cors(w http.ResponseWriter, r *http.Request, methods st
 	w.Header().Set("Access-Control-Allow-Methods", methods)
 	w.Header().Set("Access-Control-Allow-Headers", headers)
 	if allowCredentials {
-		w.Header().Set("Access-Control-Credentials", "true")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
 }
 
