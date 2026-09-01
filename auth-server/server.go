@@ -273,7 +273,7 @@ type HandlerContext struct {
 	githubClientId string
 	githubClientSecret string
 	githubOAuthRedirectURI string
-	webFrontendHostname string
+	webFrontendRootDomain string
 	sessionData SessionData
 	sharedJWT SharedJWT
 }
@@ -283,14 +283,14 @@ func NewHandlerContext(
 		githubClientSecret string,
 		githubClientPrivateKey *rsa.PrivateKey,
 		githubOAuthRedirectURI string,
-		webFrontendHostname string) HandlerContext {
-	_, webFrontendHostnameWithoutProtocol, found := strings.Cut(webFrontendHostname, "://")
+		webFrontendRootDomain string) HandlerContext {
+	_, webFrontendRootDomainWithoutProtocol, found := strings.Cut(webFrontendRootDomain, "://")
 	if !found {
-		webFrontendHostnameWithoutProtocol = webFrontendHostname
+		webFrontendRootDomainWithoutProtocol = webFrontendRootDomain
 	}
-	_, webFrontendHostnameWithoutWWW, found := strings.Cut(webFrontendHostnameWithoutProtocol, "www.")
+	_, webFrontendRootDomainWithoutWWW, found := strings.Cut(webFrontendRootDomainWithoutProtocol, "www.")
 	if !found {
-		webFrontendHostnameWithoutWWW = webFrontendHostnameWithoutProtocol
+		webFrontendRootDomainWithoutWWW = webFrontendRootDomainWithoutProtocol
 	}
 	
 	return HandlerContext{
@@ -300,7 +300,7 @@ func NewHandlerContext(
 		githubClientId: githubClientId,
 		githubClientSecret: githubClientSecret,
 		githubOAuthRedirectURI: githubOAuthRedirectURI,
-		webFrontendHostname: webFrontendHostnameWithoutWWW,
+		webFrontendRootDomain: webFrontendRootDomainWithoutWWW,
 		sessionData: *NewSessionData(),
 		sharedJWT: SharedJWT{
 			privateKey: githubClientPrivateKey,
@@ -319,7 +319,7 @@ func (h *HandlerContext) conditionallyAllowFrontendOrigin(w http.ResponseWriter,
 	if !found {
 		withoutWWW = withoutProtocol
 	}
-	if withoutWWW == h.webFrontendHostname {
+	if withoutWWW == h.webFrontendRootDomain {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 	}
 }
@@ -571,9 +571,10 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set(
 		"Set-Cookie",
 		fmt.Sprintf(
-			"session_token=%s; Max-Age=%d; Path=/; SameSite=Lax; HttpOnly; Secure",
+			"session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
 			session.SessionToken,
 			int64(session.Expiration.Sub(time.Now()).Seconds()),
+			h.webFrontendRootDomain,
 		),
 	)
 
@@ -755,7 +756,13 @@ func (h *HandlerContext) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	sessionTokenCookie, err := r.Cookie("session_token")
 	if err == nil {
 		// Session token cookie exists. Notify client to delete it.
-		w.Header().Set("Set-Cookie", "session_token=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax; HttpOnly; Secure")
+		w.Header().Set(
+			"Set-Cookie",
+			fmt.Sprintf(
+				"session_token=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
+				h.webFrontendRootDomain,
+			),
+		)
 		// Delete sever-side session if it exists.
 		h.sessionData.DeleteSession(sessionTokenCookie.Value)
 	} else if !errors.Is(err, http.ErrNoCookie) {
@@ -1078,7 +1085,7 @@ func main() {
 	githubAuthClientSecret := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_SECRET")
 	githubAuthClientPrivateKey := os.Getenv("FOOBAR_PROJECTS_GITHUB_AUTH_CLIENT_PRIVATE_KEY")
 	githubOAuthRedirectURI := os.Getenv("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI")
-	webFrontendHostname := os.Getenv("FOOBAR_PROJECTS_WEB_FRONTEND_HOSTNAME")
+	webFrontendRootDomain := os.Getenv("FOOBAR_PROJECTS_WEB_FRONTEND_ROOT_DOMAIN")
 	networkInterface := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_INTERFACE")
 	portString := os.Getenv("FOOBAR_PROJECTS_AUTH_SERVER_PORT")
 	sslCertPath := os.Getenv("FOOBAR_PROJECTS_AUTH_SSL_CERT_PATH")
@@ -1106,8 +1113,8 @@ func main() {
 		log.Fatal("FOOBAR_PROJECTS_GITHUB_OAUTH_REDIRECT_URI is not set or is empty")
 	}
 
-	if webFrontendHostname == "" {
-		log.Fatal("FOOBAR_PROJECTS_WEB_FRONTEND_HOSTNAME is not set or is empty")
+	if webFrontendRootDomain == "" {
+		log.Fatal("FOOBAR_PROJECTS_WEB_FRONTEND_ROOT_DOMAIN is not set or is empty")
 	}
 
 	if networkInterface == "" {
@@ -1162,7 +1169,7 @@ func main() {
 		githubAuthClientSecret,
 		jwtSignKey,
 		githubOAuthRedirectURI,
-		webFrontendHostname,
+		webFrontendRootDomain,
 	)
 	go handlerContext.PurgeExpiredSessionsLoop()
 
