@@ -73,7 +73,7 @@ async function authenticate() {
         'deep_link_redirect': window.location.href
     };
     const startSessionResponse = await fetch(
-        '/start-session',
+        `https://${siteConfig.authServerExternalHostname}/start-session`,
         {
             method: 'POST',
             headers: {
