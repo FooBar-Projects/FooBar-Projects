@@ -249,7 +249,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             auth: accessToken
         });
     } else if (getAccessTokenResults.status == 'bad-auth') {
-        console.log("Here");
         // Session or refresh token is expired. Redirect to GitHub OAuth login.
         const startSessionResponse = await authenticate();
         if (!startSessionResponse.ok) {

@@ -497,6 +497,10 @@ type StartSessionResponseBody struct {
 	OAuthLoginURI string `json:"oauth_login_uri"`
 }
 
+func (h *HandlerContext) startSessionCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
+	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length")
+}
+
 // /start-session endpoint (establishes session, including state + pkce code
 // verifier, and redirects user to GitHub OAuth login page)
 func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Request) {
@@ -590,6 +594,18 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 
 type AccessTokenResponse struct {
 	AccessToken string `json:"access_token"`
+}
+
+func (h *HandlerContext) corsPreflightHandler(w http.ResponseWriter, r *http.Request, methods string, headers string) {
+	h.conditionallyAllowFrontendOrigin(w, r)
+	w.Header().Set("Access-Control-Allow-Methods", methods)
+	w.Header().Set("Access-Control-Allow-Headers", headers)
+	w.Header().Set("Access-Control-Max-Age", "86400") // Cache preflight response for 24 hours
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HandlerContext) accessTokenCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
+	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length")
 }
 
 // /access-token endpoint (client provides session cookie and retrieves
@@ -1148,6 +1164,8 @@ func main() {
 	go handlerContext.PurgeExpiredSessionsLoop()
 
 	mux.HandleFunc("POST /start-session", handlerContext.startSessionHandler)
+	mux.HandleFunc("OPTIONS /start-session", handlerContext.startSessionCORSPreflightHandler)
+	mux.HandleFunc("OPTIONS /access-token", handlerContext.accessTokenCORSPreflightHandler)
 	mux.HandleFunc("GET /token", handlerContext.tokenHandler)
 	mux.HandleFunc("POST /access-token", handlerContext.accessTokenHandler)
 	mux.HandleFunc("POST /logout", handlerContext.logoutHandler)
