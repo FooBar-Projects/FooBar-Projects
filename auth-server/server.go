@@ -309,6 +309,21 @@ func NewHandlerContext(
 	}
 }
 
+func (h *HandlerContext) conditionallyAllowFrontendOrigin(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	_, withoutProtocol, found := strings.Cut(origin, "://")
+	if !found {
+		withoutProtocol = origin
+	}
+	_, withoutWWW, found := strings.Cut(withoutProtocol, "www.")
+	if !found {
+		withoutWWW = withoutProtocol
+	}
+	if withoutWWW == h.webFrontendHostname {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+	}
+}
+
 func (h *HandlerContext) PurgeExpiredSessionsLoop() {
 	ticker := time.NewTicker(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
 	for range ticker.C {
@@ -485,6 +500,9 @@ type StartSessionResponseBody struct {
 // /start-session endpoint (establishes session, including state + pkce code
 // verifier, and redirects user to GitHub OAuth login page)
 func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Request) {
+	// CORS header
+	h.conditionallyAllowFrontendOrigin(w, r)
+
 	// Verify Content-Type header
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
@@ -578,18 +596,7 @@ type AccessTokenResponse struct {
 // the access token associated with their session, refreshed if appropriate).
 func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Request) {
 	// CORS header
-	origin := r.Header.Get("Origin")
-	_, withoutProtocol, found := strings.Cut(origin, "://")
-	if !found {
-		withoutProtocol = origin
-	}
-	_, withoutWWW, found := strings.Cut(withoutProtocol, "www.")
-	if !found {
-		withoutWWW = withoutProtocol
-	}
-	if withoutWWW == h.webFrontendHostname {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-	}
+	h.conditionallyAllowFrontendOrigin(w, r)
 
 	// Get session token cookie
 	sessionTokenCookie, err := r.Cookie("session_token")
