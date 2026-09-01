@@ -498,7 +498,7 @@ type StartSessionResponseBody struct {
 }
 
 func (h *HandlerContext) startSessionCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
-	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length")
+	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
 }
 
 // /start-session endpoint (establishes session, including state + pkce code
@@ -596,16 +596,19 @@ type AccessTokenResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
-func (h *HandlerContext) corsPreflightHandler(w http.ResponseWriter, r *http.Request, methods string, headers string) {
+func (h *HandlerContext) corsPreflightHandler(w http.ResponseWriter, r *http.Request, methods string, headers string, allowCredentials bool) {
 	h.conditionallyAllowFrontendOrigin(w, r)
 	w.Header().Set("Access-Control-Allow-Methods", methods)
 	w.Header().Set("Access-Control-Allow-Headers", headers)
-	w.Header().Set("Access-Control-Max-Age", "86400") // Cache preflight response for 24 hours
+	w.Header().Set("Access-Control-Max-Age", "86400")
+	if allowCredentials {
+		w.Header().Set("Access-Control-Credentials", "true")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HandlerContext) accessTokenCORSPreflightHandler(w http.ResponseWriter, r *http.Request) {
-	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length")
+	h.corsPreflightHandler(w, r, "POST, OPTIONS", "Accept, Content-Type, Content-Length", true)
 }
 
 // /access-token endpoint (client provides session cookie and retrieves
