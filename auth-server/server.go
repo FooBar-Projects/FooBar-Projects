@@ -311,13 +311,13 @@ func NewHandlerContext(
 
 func (h *HandlerContext) conditionallyAllowFrontendOrigin(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
-	_, withoutProtocol, found := strings.Cut(origin, "://")
+	_, afterProtocol, found := strings.Cut(origin, "https://")
 	if !found {
-		withoutProtocol = origin
+		return // Only allow CORS on https
 	}
-	_, withoutWWW, found := strings.Cut(withoutProtocol, "www.")
+	_, withoutWWW, found := strings.Cut(afterProtocol, "www.")
 	if !found {
-		withoutWWW = withoutProtocol
+		withoutWWW = afterProtocol
 	}
 	if withoutWWW == h.webFrontendRootDomain {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
