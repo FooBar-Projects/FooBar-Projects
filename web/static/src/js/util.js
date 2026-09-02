@@ -132,16 +132,26 @@ export async function decryptRSA(ciphertext, key) {
 }
 
 export async function getClassroomRSAPublicKey(organizationName, userOctokit) {
-    // Get classroomRSAPublicKeyBase64 from backend-workflows repo variable
-    const getClassroomRSAPublicKeyResponse = await userOctokit.request(`GET /repos/${organizationName}/backend-workflows/actions/variables/CLASSROOM_RSA_PUBLIC_KEY`, {
-        owner: organizationName,
-        repo: 'backend-workflows',
-        name: 'CLASSROOM_RSA_PUBLIC_KEY',
-        headers: {
-            'X-GitHub-Api-Version': '2026-03-10'
+    // Get classroomRSAPublicKeyBase64 from backend-workflows repo
+    const getClassroomRSAPublicKeyResponse = await userOctokit.request(
+        `GET /repos/${organizationName}/backend-workflows/contents/CLASSROOM_RSA_PUBLIC_KEY.der`,
+        {
+            owner: organizationName,
+            repo: 'backend-workflows',
+            path: 'CLASSROOM_RSA_PUBLIC_KEY.der',
+            headers: {
+                'X-GitHub-Api-Version': '2026-03-10'
+            }
         }
-    });
-    const classroomRSAPublicKeyBase64 = getClassroomRSAPublicKeyResponse.data['value'];
+    );
+    // File is b64-encoded, AND /contents endpoint b64-encodes contents, so it's doubly-encoded.
+    // The b64-encoded contents also have newlines, which must be removed.
+    const classroomRSAPublicKeyBase64Base64 = getClassroomRSAPublicKeyResponse.data['content'].replace(/\n/g, '');
+    
+    // Decode first b64 layer
+    const classroomRSAPublicKeyBase64 = Uint8Array.fromBase64(classroomRSAPublicKeyBase64Base64);
+
+    // Decode second b64 layer to get DER binary
     const classroomRSAPublicKeyBuffer = Uint8Array.fromBase64(classroomRSAPublicKeyBase64);
     const classroomRSAPublicKey = await window.crypto.subtle.importKey(
       'spki',
