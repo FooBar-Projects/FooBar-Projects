@@ -231,11 +231,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const urlParams = new URLSearchParams(window.location.search);
     const assignmentName = urlParams.get('assignment-name');
     const assignmentAcceptKey = urlParams.get('assignment-accept-key');
-
-    const organizationName = siteConfig.backendRepoOwner;
+    const organizationName = urlParams.get('organization-name');
 
     if (assignmentName == null || assignmentName == "") {
         showError("Missing assignment name in this page's URL");
+        return;
+    }
+
+    if (organizationName == null || organizationName == "") {
+        showError("Missing organization name in this page's URL");
         return;
     }
     
