@@ -13,8 +13,10 @@ then
 	rm -rf "$tmp_dir"
 	mkdir -p "$tmp_dir"
 	mv "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR/.git" "$tmp_dir"
+	mv "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR/CLASSROOM_RSA_PUBLIC_KEY.der" "$tmp_dir"
 	find "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR" -mindepth 1 -delete
 	mv "$tmp_dir/.git" "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR"
+	mv "$tmp_dir/CLASSROOM_RSA_PUBLIC_KEY.der" "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR"
 
 	cp -a "$script_dir/../backend-workflows"/. "$DEPLOYED_BACKEND_WORKFLOWS_REPO_DIR"
 	(

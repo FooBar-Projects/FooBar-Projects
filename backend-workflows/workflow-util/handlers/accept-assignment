@@ -182,6 +182,13 @@ function merge_in_config_json() {
 # can be accepted
 found_matching_config=0
 
+# TODO remove
+echo "Student assigned sections: $student_assigned_sections"
+echo "Overridden sections: $overridden_sections"
+echo "N overridden sections: $n_overridden_sections"
+echo "Student override: $student_override"
+# TODO end remove
+
 # For each per-section config override for sections this student is assigned to:
 for i in $(seq "$n_overridden_sections")
 do
@@ -198,6 +205,7 @@ do
     # If assignment config is present, merge in top-level config
     if [[ "$assignment_config" != "" ]]
     then
+	echo "Here 1" # TODO remove
         merge_in_config_json "$assignment_config"
     fi
 
@@ -212,6 +220,17 @@ do
     # $student_override will be an empty object, so merging will have no effect
     # on the existing config shell variables)
     merge_in_config_json "$student_override"
+
+    # TODO remove
+    echo
+    echo "Section idx: $idx"
+    echo "assignment_accept_key: $assignment_accept_key"
+    echo "assignment_student_role: $assignment_student_role"
+    echo "assignment_release_at: $assignment_release_at"
+    echo "assignment_unrelease_at: $assignment_unrelease_at"
+    echo "assignment_release_at_section_start: $assignment_release_at_section_start"
+    echo "assignment_unrelease_at_section_end: $assignment_unrelease_at_section_end"
+    # TODO end remove
     
     # All overrides merged. Config is prepared.
 
@@ -224,7 +243,12 @@ do
     fi
 
     # Compute start of release window
-    release_at_iso_8601="${assignment_release_at}${timezone_utc_offset}"
+    release_at_iso_8601=""
+    if [[ "$assignment_release_at" != "" ]]
+    then
+        release_at_iso_8601="${assignment_release_at}${timezone_utc_offset}"
+    fi
+
     if [[ "$assignment_release_at_section_start" == "true" ]]
     then
         # Must shift release_at forward to section's next start time. Get
@@ -241,7 +265,7 @@ do
         fi
 
         # Section has name. Not a pseudosection.
-        section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {}')
+        section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {} end')
         
         # Get section weekday and start time
         section_weekday=$(echo "$section_data" | jq -j 'if (.weekday != null) then .weekday else "" end')
@@ -258,7 +282,7 @@ do
             # forward to next instance of section weekday, then set time to
             # section start time
             shift_amount=$(((section_weekday_number + 7 - release_at_weekday_number) % 7))
-            shifted_release_at_day=$(date -d "${release_at_day} + ${shift_amount} days" +%Y-%d-%m)
+            shifted_release_at_day=$(date -d "${release_at_day} + ${shift_amount} days" +%Y-%m-%d)
             release_at_iso_8601="${shifted_release_at_day}T${section_start_time}${timezone_utc_offset}"
         else
             # Release-at weekday is same as section weekday. Check if
@@ -273,14 +297,19 @@ do
             else
                 # Releases later in day than section start time. Shift
                 # forward by one week and to section start time.
-                shifted_release_at_day=$(date -d "${release_at_day} + 1 week" +%Y-%d-%m)
+                shifted_release_at_day=$(date -d "${release_at_day} + 1 week" +%Y-%m-%d)
                 release_at_iso_8601="${shifted_release_at_day}T${section_start_time}${timezone_utc_offset}"
             fi
         fi
     fi
 
     # Compute end of release window similarly
-    unrelease_at_iso_8601="${assignment_unrelease_at}${timezone_utc_offset}"
+    unrelease_at_iso_8601=""
+    if [[ "$assignment_unrelease_at" != "" ]]
+    then
+        unrelease_at_iso_8601="${assignment_unrelease_at}${timezone_utc_offset}"
+    fi
+
     if [[ "$assignment_unrelease_at_section_end" == "true" ]]
     then
         # Must shift unrelease_at forward to section's next end time. Get
@@ -294,7 +323,7 @@ do
         else
             # Section name present. Not a pseudosection. Assignment unreleases
             # for student at section end time.
-            section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {}')
+            section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {} end')
             
             # Get section weekday and end time
             section_weekday=$(echo "$section_data" | jq -j 'if (.weekday != null) then .weekday else "" end')
@@ -311,7 +340,7 @@ do
                 # forward to next instance of section weekday, then set time to
                 # section end time
                 shift_amount=$(((section_weekday_number + 7 - unrelease_at_weekday_number) % 7))
-                shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + ${shift_amount} days" +%Y-%d-%m)
+                shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + ${shift_amount} days" +%Y-%m-%d)
                 unrelease_at_iso_8601="${shifted_unrelease_at_day}T${section_end_time}${timezone_utc_offset}"
             else
                 # Unrelease-at weekday is same as section weekday. Check if
@@ -326,16 +355,20 @@ do
                 else
                     # Unreleases later in day than section end time. Shift
                     # forward by one week and to section end time.
-                    shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + 1 week" +%Y-%d-%m)
+                    shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + 1 week" +%Y-%m-%d)
                     unrelease_at_iso_8601="${shifted_unrelease_at_day}T${section_end_time}${timezone_utc_offset}"
                 fi
             fi
         fi
     fi
 
+    echo "Release at: $release_at_iso_8601" # TODO
+    echo "Unrelease at: $unrelease_at_iso_8601" # TODO
+
     # Check if we're outside release window.
     now_seconds_since_epoch=$(date +%s)
     if [[ "$release_at_iso_8601" != "" ]]
+    then
         # Release window has start. Check if we're before start.
         release_at_seconds_since_epoch=$(date -d "$release_at_iso_8601" +%s)
         if [[ "$now_seconds_since_epoch" -lt "$release_at_seconds_since_epoch" ]]
@@ -367,10 +400,10 @@ done
 
 # If unsuccessful in finding configuration that allows assignment acceptance,
 # report error and terminate
-if [[ "$found_matching_config" == "1" ]]
+if [[ "$found_matching_config" == "0" ]]
 then
     echo "Error: Failed to accept assignment\"$ASSIGNMENT_NAME\". Perhaps accept key \"$ASSIGNMENT_ACCEPT_KEY\" is invalid, or we're outside release window(s)." >&2
-    echo -n '{"status": "denied"}' > result/status.json # TODO handle in web frontend
+    echo -n '{"status": "denied"}' > result/status.json
     exit 0
 fi
 
