@@ -1,3 +1,4 @@
+import copy
 import yaml
 import jwt
 import shutil
@@ -390,10 +391,6 @@ class HandlerContext:
             'actions_variables': 'write',
             'workflows': 'write',
             'metadata': 'read'
-        },
-        WORKFLOW_DISPATCH_APP_ENDPOINT: {
-            'actions': 'read',
-            'issues': 'write'
         },
         ASSIGNMENT_CREATION_APP_ENDPOINT: {
             'administration': 'write',
@@ -1116,6 +1113,7 @@ class RepositoryInputData:
     description: str
     private: bool
     additional_relative_file_paths: list[str]
+    additional_dynamic_text_file_data: dict[str, str]
 
     def __init__(
             self,
@@ -1128,6 +1126,7 @@ class RepositoryInputData:
         self.description = description
         self.private = private
         self.additional_relative_file_paths = additional_relative_file_paths
+        self.additional_dynamic_text_file_data = {}
 
 
 ALL_REPOSITORY_INPUT_DATA = {
@@ -1441,7 +1440,8 @@ def populate_repository(
         organization_name: str,
         classroom_setup_token: str,
         repository_name: str,
-        additional_relative_file_paths: list[str]) -> None:
+        additional_relative_file_paths: list[str],
+        additional_dynamic_text_file_data: dict[str, str]) -> None:
     # Find this repo's root directory (closest ancestor containing .git
     # directory), falling back to this script's grandparent if .git isn't found
     base_src_dir_path = Path(__file__).resolve().parent
@@ -1544,6 +1544,25 @@ def populate_repository(
                         dirs_exist_ok=True
                     )
 
+            # Copy additional dynamic text files into local repo
+            for relative_file_path_str, contents in \
+                    additional_dynamic_text_file_data.items():
+                # Compute complete dst file path
+                relative_file_path = Path(relative_file_path_str)
+                complete_dst_file_path = base_dst_dir_path /\
+                    relative_file_path
+
+                # Create parent directory within temp directory to house
+                # file
+                complete_dst_file_path.parent.mkdir(
+                    parents=True,
+                    exist_ok=True
+                )
+
+                # Write file
+                with open(complete_dst_file_path, 'w', encoding='utf-8') as f:
+                    f.write(contents)
+
             # Stage all updated files
             subprocess.run(
                 ['git', 'add', '-A'],
@@ -1568,15 +1587,21 @@ def populate_repository(
 
 def populate_repositories(
         organization_name: str,
-        classroom_setup_token: str) -> None:
-    for repository_name, input_data in ALL_REPOSITORY_INPUT_DATA.items():
+        classroom_setup_token: str,
+        classroom_rsa_public_key: str) -> None:
+    all_input_data = copy.deepcopy(ALL_REPOSITORY_INPUT_DATA)
+    all_input_data['backend-workflows'].additional_dynamic_text_file_data[
+        'CLASSROOM_RSA_PUBLIC_KEY.der'
+    ] = classroom_rsa_public_key
+    for repository_name, input_data in all_input_data.items():
         console.log(f'Populating GitHub repository '
             f'"{organization_name}/{repository_name}"')
         populate_repository(
             organization_name,
             classroom_setup_token,
             repository_name,
-            input_data.additional_relative_file_paths
+            input_data.additional_relative_file_paths,
+            input_data.additional_dynamic_text_file_data
         )
 
 
@@ -1714,7 +1739,8 @@ def main() -> int:
     )
     populate_repositories(
         organization_name,
-        handler_context.classroom_setup_token
+        handler_context.classroom_setup_token,
+        classroom_rsa_public_key
     )
 
     console.clear()

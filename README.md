@@ -60,7 +60,7 @@ Although FooBar Projects is mostly serverless, there's a small central proxy ser
 
 The auth proxy server's source code is available [here](auth-server/). It's possible for an instructor to host their own instance of the auth proxy server, but it requires a domain name, SSL certificates, a machine on which to host the server, and additional configuration.
 
-Note that a student's OAuth access tokens, retrieved and cached by the central auth proxy server, only have the necessary and sufficient permissions to write issues, read GitHub Actions resources, and read repository variables, and only within repositories on which the workflow dispatch app is installed (i.e., classrooms' `backend-workflows` repositories). In other words, although students' access tokens are handled centrally, these tokens do not have access to students' personal resources, and they're extremely limited in what they can do.
+Note that a student's OAuth access tokens, retrieved and cached by the central auth proxy server, only have the necessary and sufficient permissions to write issues, read GitHub Actions resources, and read repository contents, and only within repositories on which the workflow dispatch app is installed (i.e., classrooms' `backend-workflows` repositories). In other words, although students' access tokens are handled centrally, these tokens do not have access to students' personal resources, and they're extremely limited in what they can do.
 
 ## Troubleshooting and FAQ
 
