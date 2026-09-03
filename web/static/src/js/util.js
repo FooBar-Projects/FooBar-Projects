@@ -149,7 +149,8 @@ export async function getClassroomRSAPublicKey(organizationName, userOctokit) {
     const classroomRSAPublicKeyBase64Base64 = getClassroomRSAPublicKeyResponse.data['content'].replace(/\n/g, '');
     
     // Decode first b64 layer
-    const classroomRSAPublicKeyBase64 = Uint8Array.fromBase64(classroomRSAPublicKeyBase64Base64);
+    const utf8Decoder = new TextDecoder('utf-8')
+    const classroomRSAPublicKeyBase64 = utf8Decoder.decode(Uint8Array.fromBase64(classroomRSAPublicKeyBase64Base64));
 
     // Decode second b64 layer to get DER binary
     const classroomRSAPublicKeyBuffer = Uint8Array.fromBase64(classroomRSAPublicKeyBase64);
