@@ -19,7 +19,7 @@ To set up a new classroom organization:
 
 Once the classroom setup script has finished, your organization should be populated with two repositories:
 - `classrooms`: This is where you'll configure your classroom and assignments, including assignment templates (e.g., starter code and instructions documents) that will be instantiated to create students' assignment repositories. `classrooms` is a private repository; students cannot view it.
-- `backend-workflows`. This repository hosts GitHub Actions workflows that serve as an event-driven backend to authenticate students, accept assignments, and so on. It's a private repository, but students' user access tokens can write issues and read workflow run artifacts in this repository to conduct backend operations. You generally shouldn't need to concern yourself with this repository.
+- `backend-workflows`. This repository hosts GitHub Actions workflows for student-facing operations, such as accepting assignments. In essence, this repository is your classroom's serverless backend. It's a public repository, and students' user access tokens can write issues, read contents, and read workflow run artifacts in this repository to conduct backend operations. You generally shouldn't need to modify anything in this repository.
 
 ## Administration (configuring the classroom, creating assignments, etc)
 
@@ -49,6 +49,9 @@ In Classroom 50, students are added to the classroom organization and then assig
 GitHub Classroom avoided these issues by hiding privileged operations behind a central backend. FooBar Projects's design philosophy is similar to GitHub Classroom's in this regard, but rather than lean on a central backend server, FooBar Projects exploits GitHub Actions workflows as a sort of serverless backend. By default, students are not given direct access to private assignment templates (templates are instantiated centrally by FooBar Projects on the student's behalf upon clicking a link provided at the instructor's discretion); students are not admins of their own assignment repositories; and students do not need to be members of the classroom's GitHub organization. However, all these things can be reconfigured if desired.
 
 (Classroom 50 uses a similar workflow-as-a-backend design for some infrequent teacher-facing operations like collecting scores and re-running autograders, but not for semi-frequent student-facing operations like accepting assignments and completing the OAuth flow.)
+
+> [!NOTE]
+> Although workflow runs in the `backend-workflows` repository are public-readable, all workflow run inputs are encrypted using the target classroom's public RSA encryption key. The corresponding private decryption key is stored as a GitHub Actions secret in the `backend-workflows` repository. Similarly, all workflow run outputs are encrypted using a public RSA encryption key provided by the requesting client alongside the workflow inputs. The corresponding private decryption key is held strictly by the requesting client.
 
 The major downside to FooBar Projects's design is that GitHub Actions workflows are asynchronous and event-driven; they're not designed for handling frequent, synchronous, short-lived, user-facing operations, but FooBar Projects uses them for such purposes anyways. This design introduces an intentional tradeoff: it makes backend operations (e.g., accepting assignments) a bit slow, and it can rack up a lot of GitHub Actions minutes, but it enables certain centralized features while simultaneously keeping things serverless and easy to self-host. (Note that backend operations can be sped up signficantly by [using self-hosted runners](#self-hosted-runners).)
 
