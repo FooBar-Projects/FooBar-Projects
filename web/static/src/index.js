@@ -139,9 +139,9 @@ async function acceptAssignment(organizationName, accessToken, accessTokenOctoki
                 succeeded: false,
                 zip: null
             };
-        } else if (statusObj.status == 'invalid-key') {
+        } else if (statusObj.status == 'denied') {
             if (assignmentAcceptKey !== null) {
-                showError(`Incorrect assignment accept key "${assignmentAcceptKey}".`);
+                showError('Assignment access denied. Perhaps your accept key is bad, or the assignment is not currently released for your class section.')
             } else {
                 showError('Missing assignment accept key.');
             }

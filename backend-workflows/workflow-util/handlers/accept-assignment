@@ -58,6 +58,324 @@ export STUDENT_ASSIGNMENT_REPO=$(echo -n "$STUDENT_ASSIGNMENT_REPO" | sed 's/[^a
 assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
 echo "::add-mask::${assignment_creation_app_installation_access_token}"
 
+# Get installation access token for classrooms app
+classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
+echo "::add-mask::${classrooms_app_installation_access_token}"
+
+# Clone classrooms repo
+git clone --depth 1 "https://${CLASSROOMS_USERNAME}:${classrooms_app_installation_access_token}@${CLASSROOMS_REPO}" classrooms-repo
+
+# Verify that the assignment to be accepted exists (either as a
+# directory with contents or in config file)
+assignment_exists=1
+assignment_template_exists=1
+if [[ ! -d "classrooms-repo/assignments/${ASSIGNMENT_NAME}" ]]
+then
+    assignment_template_exists=0
+    if [[ ! -f "classrooms-repo/assignments/assignments.conf" ]]
+    then
+        assignment_exists=0
+    else
+        n_matching_assignments=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -s 'length')
+        if [[ "$n_matching_assignments" == 0 ]]
+        then
+            assignment_exists=0
+        fi
+    fi
+fi
+
+if [[ "$assignment_exists" == 0 ]]
+then
+    # Assignment doesn't exist. Return error to client.
+    echo "Error: Assignment \"$ASSIGNMENT_NAME\" doesn't exist" >&2
+    echo -n '{"status": "unknown-assignment"}' > result/status.json
+    exit 0
+fi
+
+# Get classroom's configured timezone UTC offset and sections that this
+# student is assigned to
+timezone_utc_offset="+00:00"
+student_assigned_sections="[]"
+if [[ -f "classrooms-repo/classroom.conf" ]]
+then
+    has_field=$(cat "classrooms-repo/classroom.conf" | yq -o json '.' | jq -j '.timezone_utc_offset != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        timezone_utc_offset=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq -j '.timezone_utc_offset')
+    fi
+
+    student_assigned_sections=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq 'if (.roster != null) then .roster else [] end | .[] | select((.github_username | ascii_downcase) == ("'"$STUDENT_USERNAME"'" | ascii_downcase))' | jq -s 'if (length > 0) then .[0] else {} end | if (.sections != null) then .sections else [] end')
+    all_section_data=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq 'if (.sections != null) then .sections else [] end')
+fi
+
+# Read assignment config as JSON string
+overridden_sections="[{}]" # One pseudo section override, does not affect global config when merged in
+n_overridden_sections=1
+student_override="{}"
+if [[ -f "classrooms-repo/assignments/assignments.conf" ]]
+then
+    assignment_config=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -js 'if (length > 0) then .[0] else "" end')
+
+    if [[ "$assignment_config" != "" ]]
+    then
+        all_section_overrides=$(echo "$assignment_config" | jq 'if (.section_overrides != null) then .section_overrides else [] end')
+        n_student_assigned_sections=$(echo "$student_assigned_sections" | jq -j 'length')
+        cur_overridden_sections=""
+        for i in $(seq "$n_student_assigned_sections")
+        do
+            idx=$((i-1))
+            student_assigned_section=$(echo "$student_assigned_sections" | jq '.['"$idx"']')
+            cur_overridden_section=$(echo "$all_section_overrides" | jq '.[] | select(.section == '"$student_assigned_section"')' | jq -s 'if (length > 0) then .[0] else {} end')
+            cur_overridden_sections+="$cur_overridden_section"
+        done
+        
+        if [[ "$n_student_assigned_sections" -gt 0 ]]
+        then
+            overridden_sections=$(echo "$cur_overridden_sections" | jq -s)
+            n_overridden_sections=$(echo "$overridden_sections" | jq -j 'length') # Should match n_student_assigned_sections
+        fi
+    
+        student_override=$(echo "$assignment_config" | jq 'if (.student_overrides != null) then .student_overrides else [] end | .[] | select((.github_username | ascii_downcase) == ("'"$STUDENT_USERNAME"'" | ascii_downcase))' | jq -s 'if (length > 0) then .[0] else {} end')
+    fi
+fi
+
+# Function to merge config JSON fields into shell variables
+function merge_in_config_json() {
+    has_field=$(echo "$1" | jq -j '.key != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_accept_key=$(echo "$1" | jq -j '.key')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.student_role != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_student_role=$(echo "$1" | jq -j '.student_role')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.release_at != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_release_at=$(echo "$1" | jq -j '.release_at')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.unrelease_at != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_unrelease_at=$(echo "$1" | jq -j '.unrelease_at')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.release_at_section_start != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_release_at_section_start=$(echo "$1" | jq -j '.release_at_section_start')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.unrelease_at_section_end != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_unrelease_at_section_end=$(echo "$1" | jq -j '.unrelease_at_section_end')
+    fi
+}
+
+# Record success in finding valid config under which assignment
+# can be accepted
+found_matching_config=0
+
+# For each per-section config override for sections this student is assigned to:
+for i in $(seq "$n_overridden_sections")
+do
+    idx=$((i-1))
+
+    # Reset config values to default
+    assignment_accept_key=""
+    assignment_student_role="push"
+    assignment_release_at=""
+    assignment_unrelease_at=""
+    assignment_release_at_section_start="false"
+    assignment_unrelease_at_section_end="false"
+
+    # If assignment config is present, merge in top-level config
+    if [[ "$assignment_config" != "" ]]
+    then
+        merge_in_config_json "$assignment_config"
+    fi
+
+    # Merge in per-section config override (for sections without overrides in
+    # assignment config, or if the student isn't assigned to any sections, the
+    # override object will be an empty object, so merging will have no effect
+    # on the existing config shell variables)
+    overridden_section=$(echo "$overridden_sections" | jq '.['"$idx"']')
+    merge_in_config_json "$overridden_section"
+    
+    # Merge in per-student config override, if present (if absent,
+    # $student_override will be an empty object, so merging will have no effect
+    # on the existing config shell variables)
+    merge_in_config_json "$student_override"
+    
+    # All overrides merged. Config is prepared.
+
+    # Check if input key doesn't match assignment's configured accept key.
+    if [[ "$assignment_accept_key" != "" && "$assignment_accept_key" != "$ASSIGNMENT_ACCEPT_KEY" ]]
+    then
+        # Invalid accept key. Continue to next per-section
+        # config override
+        continue
+    fi
+
+    # Compute start of release window
+    release_at_iso_8601="${assignment_release_at}${timezone_utc_offset}"
+    if [[ "$assignment_release_at_section_start" == "true" ]]
+    then
+        # Must shift release_at forward to section's next start time. Get
+        # section name from $overridden_section.
+        section_name=$(echo "$overridden_section" | jq -j 'if (.section != null) then .section else "" end')
+        if [[ "$section_name" == "" ]]
+        then
+            # Exception: no section name. Must be pseudo section (student is not
+            # assigned to any sections, but assignment is configured to be
+            # released at start of assigned section). Then release start can't
+            # be computed, so assignment never releases for student. Continue
+            # to next assigned section (though there should be no more)
+            continue
+        fi
+
+        # Section has name. Not a pseudosection.
+        section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {}')
+        
+        # Get section weekday and start time
+        section_weekday=$(echo "$section_data" | jq -j 'if (.weekday != null) then .weekday else "" end')
+        section_start_time=$(echo "$section_data" | jq -j 'if (.start_time != null) then .start_time else "" end')
+        
+        # Shift release_at_iso_8601 forward to section weekday and start time.
+        release_at_day=$(echo "$assignment_release_at" | cut -d 'T' -f 1)
+        release_at_time=$(echo "$assignment_release_at" | cut -d 'T' -f 2)
+        release_at_weekday_number=$(date -d "$release_at_day" +%u)
+        section_weekday_number=$(date -d "next ${section_weekday}" +%u)
+        if [[ "$release_at_weekday_number" != "$section_weekday_number" ]]
+        then
+            # Release-at weekday is different from section weekday. Shift
+            # forward to next instance of section weekday, then set time to
+            # section start time
+            shift_amount=$(((section_weekday_number + 7 - release_at_weekday_number) % 7))
+            shifted_release_at_day=$(date -d "${release_at_day} + ${shift_amount} days" +%Y-%d-%m)
+            release_at_iso_8601="${shifted_release_at_day}T${section_start_time}${timezone_utc_offset}"
+        else
+            # Release-at weekday is same as section weekday. Check if
+            # release-at time is before or at section start time.
+            release_at_seconds_since_epoch=$(date -d "$release_at_time" +%s)
+            section_start_time_seconds_since_epoch=$(date -d "$section_start_time" +%s)
+            if [[ "$release_at_seconds_since_epoch" -le "$section_start_time_seconds_since_epoch" ]]
+            then
+                # Releases earlier in day than section start time. Shift
+                # forward to section start time
+                release_at_iso_8601="${release_at_day}T${section_start_time}${timezone_utc_offset}"
+            else
+                # Releases later in day than section start time. Shift
+                # forward by one week and to section start time.
+                shifted_release_at_day=$(date -d "${release_at_day} + 1 week" +%Y-%d-%m)
+                release_at_iso_8601="${shifted_release_at_day}T${section_start_time}${timezone_utc_offset}"
+            fi
+        fi
+    fi
+
+    # Compute end of release window similarly
+    unrelease_at_iso_8601="${assignment_unrelease_at}${timezone_utc_offset}"
+    if [[ "$assignment_unrelease_at_section_end" == "true" ]]
+    then
+        # Must shift unrelease_at forward to section's next end time. Get
+        # section name from $overridden_section.
+        section_name=$(echo "$overridden_section" | jq -j 'if (.section != null) then .section else "" end')
+        if [[ "$section_name" == "" ]]
+        then
+            # No section name. Pseudosection. No unrelease time. Never
+            # unrelease for this student.
+            unrelease_at_iso_8601=""
+        else
+            # Section name present. Not a pseudosection. Assignment unreleases
+            # for student at section end time.
+            section_data=$(echo "$all_section_data" | jq '.[] | select(.name == "'"$section_name"'")' | jq -s 'if (length > 0) then .[0] else {}')
+            
+            # Get section weekday and end time
+            section_weekday=$(echo "$section_data" | jq -j 'if (.weekday != null) then .weekday else "" end')
+            section_end_time=$(echo "$section_data" | jq -j 'if (.end_time != null) then .end_time else "" end')
+            
+            # Shift unrelease_at_iso_8601 forward to section weekday and end time.
+            unrelease_at_day=$(echo "$assignment_unrelease_at" | cut -d 'T' -f 1)
+            unrelease_at_time=$(echo "$assignment_unrelease_at" | cut -d 'T' -f 2)
+            unrelease_at_weekday_number=$(date -d "$unrelease_at_day" +%u)
+            section_weekday_number=$(date -d "next ${section_weekday}" +%u)
+            if [[ "$unrelease_at_weekday_number" != "$section_weekday_number" ]]
+            then
+                # Unrelease-at weekday is different from section weekday. Shift
+                # forward to next instance of section weekday, then set time to
+                # section end time
+                shift_amount=$(((section_weekday_number + 7 - unrelease_at_weekday_number) % 7))
+                shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + ${shift_amount} days" +%Y-%d-%m)
+                unrelease_at_iso_8601="${shifted_unrelease_at_day}T${section_end_time}${timezone_utc_offset}"
+            else
+                # Unrelease-at weekday is same as section weekday. Check if
+                # unrelease-at time is before or at section end time.
+                unrelease_at_seconds_since_epoch=$(date -d "$unrelease_at_time" +%s)
+                section_end_time_seconds_since_epoch=$(date -d "$section_end_time" +%s)
+                if [[ "$unrelease_at_seconds_since_epoch" -le "$section_end_time_seconds_since_epoch" ]]
+                then
+                    # Unreleases earlier in day than section end time. Shift
+                    # forward to section end time
+                    unrelease_at_iso_8601="${unrelease_at_day}T${section_end_time}${timezone_utc_offset}"
+                else
+                    # Unreleases later in day than section end time. Shift
+                    # forward by one week and to section end time.
+                    shifted_unrelease_at_day=$(date -d "${unrelease_at_day} + 1 week" +%Y-%d-%m)
+                    unrelease_at_iso_8601="${shifted_unrelease_at_day}T${section_end_time}${timezone_utc_offset}"
+                fi
+            fi
+        fi
+    fi
+
+    # Check if we're outside release window.
+    now_seconds_since_epoch=$(date +%s)
+    if [[ "$release_at_iso_8601" != "" ]]
+        # Release window has start. Check if we're before start.
+        release_at_seconds_since_epoch=$(date -d "$release_at_iso_8601" +%s)
+        if [[ "$now_seconds_since_epoch" -lt "$release_at_seconds_since_epoch" ]]
+        then
+            # Currently before release window start. Not yet released. Continue
+            # to next assigned section.
+            continue
+        fi
+    fi
+
+    if [[ "$unrelease_at_iso_8601" != "" ]]
+    then
+        # Release window has end. Check if we're after end.
+        unrelease_at_seconds_since_epoch=$(date -d "$unrelease_at_iso_8601" +%s)
+        if [[ "$now_seconds_since_epoch" -ge "$unrelease_at_seconds_since_epoch" ]]
+        then
+            # Currently at or after release window end. Unreleased. Continue
+            # to next assigned section.
+            continue
+        fi
+    fi
+
+    # Inside release window. Assignment can be accepted under this section's
+    # configuration. Report success and stop iterating through assigned
+    # sections.
+    found_matching_config=1
+    break
+done
+
+# If unsuccessful in finding configuration that allows assignment acceptance,
+# report error and terminate
+if [[ "$found_matching_config" == "1" ]]
+then
+    echo "Error: Failed to accept assignment\"$ASSIGNMENT_NAME\". Perhaps accept key \"$ASSIGNMENT_ACCEPT_KEY\" is invalid, or we're outside release window(s)." >&2
+    echo -n '{"status": "denied"}' > result/status.json # TODO handle in web frontend
+    exit 0
+fi
+
+# Assignment can be accepted.
+
 # Check if student assignment repo already exists.
 get_remote_repo_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
     -H "Accept: application/vnd.github+json" \
@@ -68,64 +386,6 @@ get_remote_repo_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
 if [[ "$get_remote_repo_status" == "404" ]]
 then
     # Repo doesn't exist. Create it.
-
-    # Get installation access token for classrooms app
-    classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
-    echo "::add-mask::${classrooms_app_installation_access_token}"
-
-    # Clone classrooms repo
-    git clone --depth 1 "https://${CLASSROOMS_USERNAME}:${classrooms_app_installation_access_token}@${CLASSROOMS_REPO}" classrooms-repo
-
-    # Verify that the assignment to be accepted exists (either as a
-    # directory with contents or in config file)
-    assignment_exists=1
-    assignment_template_exists=1
-    if [[ ! -d "classrooms-repo/assignments/${ASSIGNMENT_NAME}" ]]
-    then
-        assignment_template_exists=0
-        if [[ ! -f "classrooms-repo/assignments/assignments.conf" ]]
-        then
-            assignment_exists=0
-        else
-            n_matching_assignments=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -s 'length')
-            if [[ "$n_matching_assignments" == 0 ]]
-            then
-                assignment_exists=0
-            fi
-        fi
-    fi
-
-    if [[ "$assignment_exists" == 0 ]]
-    then
-        # Assignment doesn't exist. Return error to client.
-        echo "Error: Assignment \"$ASSIGNMENT_NAME\" doesn't exist" >&2
-        echo -n '{"status": "unknown-assignment"}' > result/status.json
-        exit 0
-    fi
-
-    # Read assignment config
-    if [[ -f "classrooms-repo/assignments/assignments.conf" ]]
-    then
-        assignment_accept_key=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -rjs 'if (length > 0) and (.[0].key != null) then .[0].key else "" end')
-        assignment_student_role=$(cat "classrooms-repo/assignments/assignments.conf" | yq -o json '.[] | select(.name == "'"$ASSIGNMENT_NAME"'")' | jq -rjs 'if (length > 0) and (.[0].student_role != null) then .[0].student_role else "" end')
-    fi
-
-    # Override missing config fields with defaults
-    if [[ "$assignment_student_role" == "" ]]
-    then
-        assignment_student_role="push"
-    fi
-
-    # Verify input key matches assignment's configured accept key
-    if [[ "$assignment_accept_key" != "" && "$assignment_accept_key" != "$ASSIGNMENT_ACCEPT_KEY" ]]
-    then
-        # Invalid assignment accept key. Return error to client.
-        echo "Error: Invalid assignment accept key \"$ASSIGNMENT_ACCEPT_KEY\" for assignment \"$ASSIGNMENT_NAME\"" >&2
-        echo -n '{"status": "invalid-key"}' > result/status.json
-        exit 0
-    fi
-
-    # Create remote student assignment repo
     create_remote_repo_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
         -X POST \
         -H "Accept: application/vnd.github+json" \
@@ -195,7 +455,7 @@ then
         STUDENT_ID=$(cat curl.json | jq -r '.value')
     else
         # Variable doesn't exist. Then the repo can be registered to this
-	# student. Create
+        # student. Create
         # the STUDENT_ID variable using ID of current authenticated
         # user.
         STUDENT_ID="$AUTHENTICATED_STUDENT_ID"
