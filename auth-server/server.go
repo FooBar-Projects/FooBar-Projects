@@ -309,21 +309,6 @@ func NewHandlerContext(
 	}
 }
 
-func (h *HandlerContext) conditionallyAllowFrontendOrigin(w http.ResponseWriter, r *http.Request) {
-	origin := r.Header.Get("Origin")
-	_, afterProtocol, found := strings.Cut(origin, "https://")
-	if !found {
-		return // Only allow CORS on https
-	}
-	_, withoutWWW, found := strings.Cut(afterProtocol, "www.")
-	if !found {
-		withoutWWW = afterProtocol
-	}
-	if withoutWWW == h.webFrontendRootDomain {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-	}
-}
-
 func (h *HandlerContext) PurgeExpiredSessionsLoop() {
 	ticker := time.NewTicker(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
 	for range ticker.C {
@@ -498,7 +483,21 @@ type StartSessionResponseBody struct {
 }
 
 func (h *HandlerContext) cors(w http.ResponseWriter, r *http.Request, methods string, headers string, allowCredentials bool) {
-	h.conditionallyAllowFrontendOrigin(w, r)
+	origin := r.Header.Get("Origin")
+	_, afterProtocol, found := strings.Cut(origin, "https://")
+	if !found {
+		return // Only allow CORS on https
+	}
+	_, withoutWWW, found := strings.Cut(afterProtocol, "www.")
+	if !found {
+		withoutWWW = afterProtocol
+	}
+	if withoutWWW != h.webFrontendRootDomain {
+		return // Origin is not web frontend. Do not set CORS headers.
+	}
+	
+	// Origin is web frontend. Set CORS headers.
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", methods)
 	w.Header().Set("Access-Control-Allow-Headers", headers)
 	if allowCredentials {
