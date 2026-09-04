@@ -387,6 +387,7 @@ func (h *HandlerContext) PurgeExpiredSessionsLoop() {
 	ticker := time.NewTicker(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
 	for range ticker.C {
 		h.authorizingSessionData.PurgeExpiredSessions()
+		h.loginSessionData.PurgeExpiredSessions()
 	}
 }
 
@@ -435,12 +436,13 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up authorizing session
-	session := *(h.authorizingSessionData.GetSession(authorizingSessionTokenCookie.Value))
-	if session == nil {
+	sessionPtr := h.authorizingSessionData.GetSession(authorizingSessionTokenCookie.Value)
+	if sessionPtr == nil {
 		fmt.Println("/token request given invalid or expired session token")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+	session := *sessionPtr
 
 	// Verify state query param matches state cookie (ensures browser session
 	// that started login flow is same browser session making this request;
@@ -531,17 +533,38 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 	h.authorizingSessionData.DeleteSession(session.SessionToken)
 
 	// Notify client to store login session_token cookie
-	w.Header().Set(
-		"Set-Cookie",
-		fmt.Sprintf(
-			"session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
-			loginSession.SessionToken,
-			int64(loginSession.GetExpiration().Sub(time.Now()).Seconds()),
-			h.webFrontendRootDomain,
-		),
-	)
+	newSessionTokenCookie := &http.Cookie{
+		Name: "session_token",
+		Value: loginSession.SessionToken,
+		Path: "/",
+		Domain: h.webFrontendRootDomain,
+		MaxAge: int(loginSession.GetExpiration().Sub(time.Now()).Seconds()),
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
+		Secure: true,
+	}
+	http.SetCookie(w, newSessionTokenCookie)
 
-	// Redirect user to deep link redirect URL
+	// TODO remove
+	for _, cookie := range r.Cookies() {
+		fmt.Printf("/token Got cookie: %s=%s; Path=%s; Domain=%s; Raw=%s\n", cookie.Name, cookie.Value, cookie.Path, cookie.Domain, cookie.Raw)
+	}
+	fmt.Printf("Setting session token: %s\n", loginSession.SessionToken)
+
+	// Notify client to delete authorizing_session_token cookie
+	deleteAuthorizingSessionTokenCookie := &http.Cookie{
+		Name: "authorizing_session_token",
+		Value: "",
+		Path: "/",
+		Domain: h.webFrontendRootDomain,
+		MaxAge: -1,
+		Expires: time.Unix(0, 0),
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
+		Secure: true,
+	}
+	http.SetCookie(w, deleteAuthorizingSessionTokenCookie)
+
 	http.Redirect(w, r, session.State.DeepLinkRedirect, http.StatusTemporaryRedirect)
 }
 
@@ -657,15 +680,17 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 		h.githubOAuthRedirectURI,
 		codeChallenge,
 	)
-	w.Header().Set(
-		"Set-Cookie",
-		fmt.Sprintf(
-			"authorizing_session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
-			session.SessionToken,
-			int64(session.GetExpiration().Sub(time.Now()).Seconds()),
-			h.webFrontendRootDomain,
-		),
-	)
+	newAuthorizingSessionTokenCookie := &http.Cookie{
+		Name: "authorizing_session_token",
+		Value: session.SessionToken,
+		Path: "/",
+		Domain: h.webFrontendRootDomain,
+		MaxAge: int(session.GetExpiration().Sub(time.Now()).Seconds()),
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
+		Secure: true,
+	}
+	http.SetCookie(w, newAuthorizingSessionTokenCookie)
 
 	payload := StartSessionResponseBody{
 		OAuthLoginURI: redirectURL,
@@ -715,13 +740,21 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// TODO remove
+	for _, cookie := range r.Cookies() {
+		fmt.Printf("/access-token Got cookie: %s=%s; Path=%s; Domain=%s; Raw=%s\n", cookie.Name, cookie.Value, cookie.Path, cookie.Domain, cookie.Raw)
+	}
+	fmt.Printf("/access-token Got session token: %s\n", loginSessionTokenCookie.Value)
+	fmt.Printf("/access-token Got raw session token: %s\n", loginSessionTokenCookie.Raw)
+
 	// Look up session
-	session := *(h.loginSessionData.GetSession(loginSessionTokenCookie.Value))
-	if session == nil {
+	sessionPtr := h.loginSessionData.GetSession(loginSessionTokenCookie.Value)
+	if sessionPtr == nil {
 		fmt.Println("/access-token request given invalid or expired session token")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
+	session := *sessionPtr
 
 	// Check for expiration
 	if session.AccessTokenExpiration.Before(time.Now()) {
@@ -829,15 +862,20 @@ func (h *HandlerContext) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	loginSessionTokenCookie, err := r.Cookie("session_token")
 	if err == nil {
 		// Session token cookie exists. Notify client to delete it.
-		w.Header().Set(
-			"Set-Cookie",
-			fmt.Sprintf(
-				"session_token=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
-				h.webFrontendRootDomain,
-			),
-		)
+		deleteSessionTokenCookie := &http.Cookie{
+			Name: "session_token",
+			Value: "",
+			Path: "/",
+			Domain: h.webFrontendRootDomain,
+			MaxAge: -1,
+			Expires: time.Unix(0, 0),
+			SameSite: http.SameSiteLaxMode,
+			HttpOnly: true,
+			Secure: true,
+		}
+		http.SetCookie(w, deleteSessionTokenCookie)
 		// Delete sever-side session if it exists.
-		h.authorizingSessionData.DeleteSession(loginSessionTokenCookie.Value)
+		h.loginSessionData.DeleteSession(loginSessionTokenCookie.Value)
 	} else if !errors.Is(err, http.ErrNoCookie) {
 		fmt.Println("Internal error: /logout handler failed to retrieve session_token cookie")
 		w.WriteHeader(http.StatusInternalServerError)

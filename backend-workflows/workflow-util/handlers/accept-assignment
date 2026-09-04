@@ -182,13 +182,6 @@ function merge_in_config_json() {
 # can be accepted
 found_matching_config=0
 
-# TODO remove
-echo "Student assigned sections: $student_assigned_sections"
-echo "Overridden sections: $overridden_sections"
-echo "N overridden sections: $n_overridden_sections"
-echo "Student override: $student_override"
-# TODO end remove
-
 # For each per-section config override for sections this student is assigned to:
 for i in $(seq "$n_overridden_sections")
 do
@@ -205,7 +198,6 @@ do
     # If assignment config is present, merge in top-level config
     if [[ "$assignment_config" != "" ]]
     then
-	echo "Here 1" # TODO remove
         merge_in_config_json "$assignment_config"
     fi
 
@@ -220,17 +212,6 @@ do
     # $student_override will be an empty object, so merging will have no effect
     # on the existing config shell variables)
     merge_in_config_json "$student_override"
-
-    # TODO remove
-    echo
-    echo "Section idx: $idx"
-    echo "assignment_accept_key: $assignment_accept_key"
-    echo "assignment_student_role: $assignment_student_role"
-    echo "assignment_release_at: $assignment_release_at"
-    echo "assignment_unrelease_at: $assignment_unrelease_at"
-    echo "assignment_release_at_section_start: $assignment_release_at_section_start"
-    echo "assignment_unrelease_at_section_end: $assignment_unrelease_at_section_end"
-    # TODO end remove
     
     # All overrides merged. Config is prepared.
 
@@ -361,9 +342,6 @@ do
             fi
         fi
     fi
-
-    echo "Release at: $release_at_iso_8601" # TODO
-    echo "Unrelease at: $unrelease_at_iso_8601" # TODO
 
     # Check if we're outside release window.
     now_seconds_since_epoch=$(date +%s)
