@@ -46,7 +46,7 @@ func (as *AuthState) Equals(other *AuthState) bool {
 	return true
 }
 
-type Session struct {
+type AuthorizingSession struct {
 	SessionToken string
 	PKCECodeVerifier *string
 	State *AuthState
@@ -54,10 +54,10 @@ type Session struct {
 	AccessTokenExpiration *time.Time
 	RefreshToken *string
 	RefreshTokenExpiration *time.Time
-	Expiration time.Time
+	ExpiresAt time.Time
 }
 
-func (s *Session) Clone() *Session {
+func (s *AuthorizingSession) Clone() *AuthorizingSession {
 	result := *s
 
 	if result.State != nil {
@@ -81,7 +81,7 @@ func SecureRandomString(minLength int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-func NewSession(deepLinkRedirect string) (*Session, error) {
+func NewAuthorizingSession(deepLinkRedirect string) (*AuthorizingSession, error) {
 	sessionToken, err := SecureRandomString(32)
 	if err != nil {
 		return nil, err
@@ -94,50 +94,81 @@ func NewSession(deepLinkRedirect string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	session := &Session{
+	session := &AuthorizingSession{
 		SessionToken: sessionToken,
 		PKCECodeVerifier: &pkceCodeVerifier,
 		State: &AuthState{
 			RandomToken: stateRandomToken,
 			DeepLinkRedirect: deepLinkRedirect,
 		},
-		Expiration: time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute),
+		ExpiresAt: time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute),
 	}
 
 	return session, nil
 }
 
-type SessionData struct {
-	mutex sync.RWMutex
-	lookupTable map[string]*Session
-	lookupTableToBePurged map[string]*Session
+func (s AuthorizingSession) Token() string {
+	return s.SessionToken
 }
 
-func NewSessionData() *SessionData {
-	return &SessionData{
-		lookupTable: make(map[string]*Session),
-		lookupTableToBePurged: make(map[string]*Session),
+type Cloneable[T any] interface {
+	Clone() T
+}
+
+type WithToken interface {
+	Token() string
+}
+
+type Expirable interface {
+	GetExpiration() time.Time
+	SetExpiration(time.Time)
+}
+
+type SessionConstraints[SessionType any] interface {
+	Cloneable[SessionType]
+	WithToken
+	Expirable
+}
+
+type SessionData[SessionType SessionConstraints[SessionType]] struct {
+	mutex sync.RWMutex
+	lookupTable map[string]SessionType
+	lookupTableToBePurged map[string]SessionType
+}
+
+func NewSessionData[SessionType SessionConstraints[SessionType]]() *SessionData[SessionType] {
+	return &SessionData[SessionType]{
+		lookupTable: make(map[string]SessionType),
+		lookupTableToBePurged: make(map[string]SessionType),
 	}
 }
 
-func (sessionData *SessionData) AddSession(session *Session) {
+func (s AuthorizingSession) GetExpiration() time.Time {
+	return s.ExpiresAt
+}
+
+func (s AuthorizingSession) SetExpiration(expiresAt time.Time) {
+	s.ExpiresAt = expiresAt
+}
+
+func (sessionData *SessionData[SessionType]) AddSession(session SessionType) {
 	sessionData.mutex.Lock()
 	defer sessionData.mutex.Unlock()
 
 	// Store clone in lookup table (prevents shared access outside of critical
 	// section)
-	sessionData.lookupTable[session.SessionToken] = session.Clone()
+	sessionData.lookupTable[session.Token()] = session.Clone()
 }
 
-func (sessionData *SessionData) UpdateSession(session *Session) error {
+func (sessionData *SessionData[SessionType]) UpdateSession(session SessionType) error {
 	sessionData.mutex.Lock()
 	defer sessionData.mutex.Unlock()
 
 	// Verify session exists in sessionData
-	_, exists := sessionData.lookupTable[session.SessionToken]
+	_, exists := sessionData.lookupTable[session.Token()]
 	if !exists {
 		// Check to-be-purged lookup table
-		_, exists = sessionData.lookupTableToBePurged[session.SessionToken]
+		_, exists = sessionData.lookupTableToBePurged[session.Token()]
 		if !exists {
 			// Session doesn't exist. Perhaps user just logged out. Return error.
 			return errors.New("session no longer exists")
@@ -146,15 +177,15 @@ func (sessionData *SessionData) UpdateSession(session *Session) error {
 
 	// Store clone in lookup table (prevents shared access outside of critical
 	// section)
-	sessionData.lookupTable[session.SessionToken] = session.Clone()
+	sessionData.lookupTable[session.Token()] = session.Clone()
 
 	// If session is in lookup table to be purged, remove it
-	delete(sessionData.lookupTableToBePurged, session.SessionToken)
+	delete(sessionData.lookupTableToBePurged, session.Token())
 
 	return nil
 }
 
-func (sessionData *SessionData) GetSession(sessionToken string) *Session {
+func (sessionData *SessionData[SessionType]) GetSession(sessionToken string) *SessionType {
 	sessionData.mutex.Lock()
 	defer sessionData.mutex.Unlock()
 
@@ -169,7 +200,7 @@ func (sessionData *SessionData) GetSession(sessionToken string) *Session {
 
 		// Session found, to be purged in next purging cycle. Check if it's
 		// expired.
-		if session.Expiration.Before(time.Now()) {
+		if session.GetExpiration().Before(time.Now()) {
 			// Expired. Delete it and return nil
 			delete(sessionData.lookupTableToBePurged, sessionToken)
 			return nil
@@ -179,15 +210,16 @@ func (sessionData *SessionData) GetSession(sessionToken string) *Session {
 		// so that it doesn't get purged in next purging cycle (and for
 		// faster subsequent lookups). Then return clone (prevents shared
 		// access outside of critical section).
-		session.Expiration = time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
+		session.SetExpiration(time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute))
 		sessionData.lookupTable[sessionToken] = session
 		delete(sessionData.lookupTableToBePurged, sessionToken)
-		return session.Clone()
+		res := session.Clone()
+		return &res
 	}
 
 	// Session found in regular (non-purging) lookup table. Check for
 	// expiration.
-	if session.Expiration.Before(time.Now()) {
+	if session.GetExpiration().Before(time.Now()) {
 		// Session is expired. Delete it and return nil
 		delete(sessionData.lookupTable, sessionToken)
 		return nil
@@ -195,12 +227,13 @@ func (sessionData *SessionData) GetSession(sessionToken string) *Session {
 
 	// Session is not expired. Update expiration and return clone (prevents
 	// shared access outside of critical section).
-	session.Expiration = time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
+	session.SetExpiration(time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute))
 
-	return session.Clone()
+	res := session.Clone()
+	return &res
 }
 
-func (sessionData *SessionData) DeleteSession(sessionToken string) {
+func (sessionData *SessionData[SessionType]) DeleteSession(sessionToken string) {
 	sessionData.mutex.Lock()
 	defer sessionData.mutex.Unlock()
 
@@ -210,7 +243,7 @@ func (sessionData *SessionData) DeleteSession(sessionToken string) {
 
 // Runs every purge cycle (interval = session token expiration time); purges
 // tokens from server memory that haven't been touched in the last cycle
-func (sessionData *SessionData) PurgeExpiredSessions() {
+func (sessionData *SessionData[SessionType]) PurgeExpiredSessions() {
 	sessionData.mutex.Lock()
 	defer sessionData.mutex.Unlock()
 
@@ -224,7 +257,7 @@ func (sessionData *SessionData) PurgeExpiredSessions() {
 	// Bind lookupTable to new, fresh map. Sessions in the to-be-purged
 	// table will be moved here dynamically as they're re-used, or purged
 	// in the next purge cycle if they aren't reused
-	sessionData.lookupTable = make(map[string]*Session)
+	sessionData.lookupTable = make(map[string]SessionType)
 }
 
 type SharedJWT struct {
@@ -274,7 +307,7 @@ type HandlerContext struct {
 	githubClientSecret string
 	githubOAuthRedirectURI string
 	webFrontendRootDomain string
-	sessionData SessionData
+	sessionData SessionData[*AuthorizingSession]
 	sharedJWT SharedJWT
 }
 
@@ -301,7 +334,7 @@ func NewHandlerContext(
 		githubClientSecret: githubClientSecret,
 		githubOAuthRedirectURI: githubOAuthRedirectURI,
 		webFrontendRootDomain: webFrontendRootDomainWithoutWWW,
-		sessionData: *NewSessionData(),
+		sessionData: *NewSessionData[*AuthorizingSession](),
 		sharedJWT: SharedJWT{
 			privateKey: githubClientPrivateKey,
 			clientId: githubClientId,
@@ -361,7 +394,7 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up session
-	session := h.sessionData.GetSession(sessionTokenCookie.Value)
+	session := *(h.sessionData.GetSession(sessionTokenCookie.Value))
 	if session == nil {
 		fmt.Println("/token request given invalid or expired session token")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -554,7 +587,7 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Create new session.
-	session, err := NewSession(requestBody.DeepLinkRedirect)
+	session, err := NewAuthorizingSession(requestBody.DeepLinkRedirect)
 	if err != nil {
 		fmt.Println("Internal error: /start-session handler failed to create session")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -591,7 +624,7 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 		fmt.Sprintf(
 			"session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
 			session.SessionToken,
-			int64(session.Expiration.Sub(time.Now()).Seconds()),
+			int64(session.GetExpiration().Sub(time.Now()).Seconds()),
 			h.webFrontendRootDomain,
 		),
 	)
@@ -645,7 +678,7 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Look up session
-	session := h.sessionData.GetSession(sessionTokenCookie.Value)
+	session := *(h.sessionData.GetSession(sessionTokenCookie.Value))
 	if session == nil {
 		fmt.Println("/access-token request given invalid or expired session token")
 		w.WriteHeader(http.StatusUnauthorized)
