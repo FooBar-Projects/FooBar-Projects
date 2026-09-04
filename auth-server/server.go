@@ -46,27 +46,6 @@ func (as *AuthState) Equals(other *AuthState) bool {
 	return true
 }
 
-type AuthorizingSession struct {
-	SessionToken string
-	PKCECodeVerifier *string
-	State *AuthState
-	AccessToken *string
-	AccessTokenExpiration *time.Time
-	RefreshToken *string
-	RefreshTokenExpiration *time.Time
-	ExpiresAt time.Time
-}
-
-func (s *AuthorizingSession) Clone() *AuthorizingSession {
-	result := *s
-
-	if result.State != nil {
-		result.State = result.State.Clone()
-	}
-
-	return &result
-}
-
 func GeneratePKCECodeChallenge(codeVerifier string) string {
 	hash := sha256.Sum256([]byte(codeVerifier))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
@@ -79,6 +58,31 @@ func SecureRandomString(minLength int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+type AuthorizingSession struct {
+	SessionToken string
+	PKCECodeVerifier string
+	State AuthState
+	ExpiresAt time.Time
+}
+
+func (s *AuthorizingSession) Clone() *AuthorizingSession {
+	result := *s
+	result.State = *result.State.Clone()
+	return &result
+}
+
+func (s *AuthorizingSession) Token() string {
+	return s.SessionToken
+}
+
+func (s *AuthorizingSession) GetExpiration() time.Time {
+	return s.ExpiresAt
+}
+
+func (s *AuthorizingSession) SetExpiration(expiresAt time.Time) {
+	s.ExpiresAt = expiresAt
 }
 
 func NewAuthorizingSession(deepLinkRedirect string) (*AuthorizingSession, error) {
@@ -96,8 +100,8 @@ func NewAuthorizingSession(deepLinkRedirect string) (*AuthorizingSession, error)
 	}
 	session := &AuthorizingSession{
 		SessionToken: sessionToken,
-		PKCECodeVerifier: &pkceCodeVerifier,
-		State: &AuthState{
+		PKCECodeVerifier: pkceCodeVerifier,
+		State: AuthState{
 			RandomToken: stateRandomToken,
 			DeepLinkRedirect: deepLinkRedirect,
 		},
@@ -107,8 +111,51 @@ func NewAuthorizingSession(deepLinkRedirect string) (*AuthorizingSession, error)
 	return session, nil
 }
 
-func (s AuthorizingSession) Token() string {
+type LoginSession struct {
+	SessionToken string
+	AccessToken string
+	AccessTokenExpiration time.Time
+	RefreshToken string
+	RefreshTokenExpiration time.Time
+	ExpiresAt time.Time
+}
+
+func (s *LoginSession) Clone() *LoginSession {
+	result := *s
+	return &result
+}
+
+func (s *LoginSession) Token() string {
 	return s.SessionToken
+}
+
+func (s *LoginSession) GetExpiration() time.Time {
+	return s.ExpiresAt
+}
+
+func (s *LoginSession) SetExpiration(expiresAt time.Time) {
+	s.ExpiresAt = expiresAt
+}
+
+func NewLoginSession(
+		accessToken string,
+		accessTokenExpiration time.Time,
+		refreshToken string,
+		refreshTokenExpiration time.Time) (*LoginSession, error) {
+	sessionToken, err := SecureRandomString(32)
+	if err != nil {
+		return nil, err
+	}
+	session := &LoginSession{
+		SessionToken: sessionToken,
+		AccessToken: accessToken,
+		AccessTokenExpiration: accessTokenExpiration,
+		RefreshToken: refreshToken,
+		RefreshTokenExpiration: refreshTokenExpiration,
+		ExpiresAt: time.Now().Add(time.Duration(sessionExpirationTimeMinutes) * time.Minute),
+	}
+
+	return session, nil
 }
 
 type Cloneable[T any] interface {
@@ -141,14 +188,6 @@ func NewSessionData[SessionType SessionConstraints[SessionType]]() *SessionData[
 		lookupTable: make(map[string]SessionType),
 		lookupTableToBePurged: make(map[string]SessionType),
 	}
-}
-
-func (s AuthorizingSession) GetExpiration() time.Time {
-	return s.ExpiresAt
-}
-
-func (s AuthorizingSession) SetExpiration(expiresAt time.Time) {
-	s.ExpiresAt = expiresAt
 }
 
 func (sessionData *SessionData[SessionType]) AddSession(session SessionType) {
@@ -307,7 +346,8 @@ type HandlerContext struct {
 	githubClientSecret string
 	githubOAuthRedirectURI string
 	webFrontendRootDomain string
-	sessionData SessionData[*AuthorizingSession]
+	authorizingSessionData SessionData[*AuthorizingSession]
+	loginSessionData SessionData[*LoginSession]
 	sharedJWT SharedJWT
 }
 
@@ -334,7 +374,8 @@ func NewHandlerContext(
 		githubClientSecret: githubClientSecret,
 		githubOAuthRedirectURI: githubOAuthRedirectURI,
 		webFrontendRootDomain: webFrontendRootDomainWithoutWWW,
-		sessionData: *NewSessionData[*AuthorizingSession](),
+		authorizingSessionData: *NewSessionData[*AuthorizingSession](),
+		loginSessionData: *NewSessionData[*LoginSession](),
 		sharedJWT: SharedJWT{
 			privateKey: githubClientPrivateKey,
 			clientId: githubClientId,
@@ -345,7 +386,7 @@ func NewHandlerContext(
 func (h *HandlerContext) PurgeExpiredSessionsLoop() {
 	ticker := time.NewTicker(time.Duration(sessionExpirationTimeMinutes) * time.Minute)
 	for range ticker.C {
-		h.sessionData.PurgeExpiredSessions()
+		h.authorizingSessionData.PurgeExpiredSessions()
 	}
 }
 
@@ -380,32 +421,23 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get session token cookie
-	sessionTokenCookie, err := r.Cookie("session_token")
+	authorizingSessionTokenCookie, err := r.Cookie("authorizing_session_token")
 	if err != nil {
 		if errors.Is(err, http.ErrNoCookie) {
-			fmt.Println("/token request is missing session_token cookie")
+			fmt.Println("/token request is missing authorizing_session_token cookie")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		} else {
-			fmt.Println("Internal error: /token handler failed to retrieve session_token cookie")
+			fmt.Println("Internal error: /token handler failed to retrieve authorizing_session_token cookie")
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Look up session
-	session := *(h.sessionData.GetSession(sessionTokenCookie.Value))
+	// Look up authorizing session
+	session := *(h.authorizingSessionData.GetSession(authorizingSessionTokenCookie.Value))
 	if session == nil {
 		fmt.Println("/token request given invalid or expired session token")
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	// Check if session has PKCE verifier and auth state
-	if session.PKCECodeVerifier == nil || session.State == nil {
-		// Missing code verifier / auth state. Perhaps this session has
-		// already completed the auth flow.
-		fmt.Println("/token request given session token for session with missing PKCE code verifier or state")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -428,7 +460,7 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
 	}
-	if !stateQueryParamObj.Equals(session.State) {
+	if !stateQueryParamObj.Equals(&session.State) {
 		fmt.Println("/token request given state that doesn't match session")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -445,7 +477,7 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 			h.githubClientSecret,
 			authCodeQueryParamValue,
 			h.githubOAuthRedirectURI,
-			*(session.PKCECodeVerifier),
+			session.PKCECodeVerifier,
 		),
 		nil,
 	)
@@ -481,30 +513,36 @@ func (h *HandlerContext) tokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist auth tokens in server-side session data
-	session.AccessToken = &responseObj.AccessToken
-	accessTokenExpiration := time.Now().Add(time.Duration(responseObj.AccessTokenExpiresIn - 20) * time.Second)
-	session.AccessTokenExpiration = &accessTokenExpiration
-	session.RefreshToken = &responseObj.RefreshToken
-	refreshTokenExpiration := time.Now().Add(time.Duration(responseObj.RefreshTokenExpiresIn - 20) * time.Second)
-	session.RefreshTokenExpiration = &refreshTokenExpiration
-
-	// Delete session's State and PKCECodeVerifier
-	deepLinkRedirect := session.State.DeepLinkRedirect
-	session.State = nil
-	session.PKCECodeVerifier = nil
-
-	// Push session changes to lookup table
-	err = h.sessionData.UpdateSession(session)
+	// Persist auth tokens in server-side login session
+	loginSession, err := NewLoginSession(
+		responseObj.AccessToken,
+		time.Now().Add(time.Duration(responseObj.AccessTokenExpiresIn - 20) * time.Second),
+		responseObj.RefreshToken,
+		time.Now().Add(time.Duration(responseObj.RefreshTokenExpiresIn - 20) * time.Second),
+	)
 	if err != nil {
-		// Session disappeared. Perhaps user just logged out suddenly.
-		fmt.Println("/token: session was deleted suddenly")
-		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Println("/token: Failed to create login session")
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	h.loginSessionData.AddSession(loginSession)
+
+	// Delete authorizing session from lookup table
+	h.authorizingSessionData.DeleteSession(session.SessionToken)
+
+	// Notify client to store login session_token cookie
+	w.Header().Set(
+		"Set-Cookie",
+		fmt.Sprintf(
+			"session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
+			loginSession.SessionToken,
+			int64(loginSession.GetExpiration().Sub(time.Now()).Seconds()),
+			h.webFrontendRootDomain,
+		),
+	)
 
 	// Redirect user to deep link redirect URL
-	http.Redirect(w, r, deepLinkRedirect, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, session.State.DeepLinkRedirect, http.StatusTemporaryRedirect)
 }
 
 type StartSessionRequestBody struct {
@@ -575,13 +613,13 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Check for session token cookie
-	sessionTokenCookie, err := r.Cookie("session_token")
+	// Check for authorizing session token cookie
+	authorizingSessionTokenCookie, err := r.Cookie("authorizing_session_token")
 	if err == nil {
 		// Session token found. Delete session if it exists before proceeding.
-		h.sessionData.DeleteSession(sessionTokenCookie.Value)
+		h.authorizingSessionData.DeleteSession(authorizingSessionTokenCookie.Value)
 	} else if !errors.Is(err, http.ErrNoCookie) {
-		fmt.Println("Internal error: /token handler failed to retrieve session_token cookie")
+		fmt.Println("Internal error: /token handler failed to retrieve authorizing_session_token cookie")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -595,7 +633,7 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Add session to shared lookup table
-	h.sessionData.AddSession(session)
+	h.authorizingSessionData.AddSession(session)
 
 	// Convert state to base64url string
 	stateJsonBytes, err := json.Marshal(session.State)
@@ -607,7 +645,7 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 	stateBase64url := base64.RawURLEncoding.EncodeToString(stateJsonBytes)
 
 	// Generate PKCE code challenge
-	codeChallenge := GeneratePKCECodeChallenge(*session.PKCECodeVerifier)
+	codeChallenge := GeneratePKCECodeChallenge(session.PKCECodeVerifier)
 
 	// Notify app to redirect user to GitHub OAuth login page
 	redirectURL := fmt.Sprintf(
@@ -622,7 +660,7 @@ func (h *HandlerContext) startSessionHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set(
 		"Set-Cookie",
 		fmt.Sprintf(
-			"session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
+			"authorizing_session_token=%s; Max-Age=%d; Domain=%s; Path=/; SameSite=Lax; HttpOnly; Secure",
 			session.SessionToken,
 			int64(session.GetExpiration().Sub(time.Now()).Seconds()),
 			h.webFrontendRootDomain,
@@ -664,7 +702,7 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 	h.accessTokenCORS(w, r)
 
 	// Get session token cookie
-	sessionTokenCookie, err := r.Cookie("session_token")
+	loginSessionTokenCookie, err := r.Cookie("session_token")
 	if err != nil {
 		if errors.Is(err, http.ErrNoCookie) {
 			fmt.Println("/access-token request is missing session_token cookie")
@@ -678,22 +716,15 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Look up session
-	session := *(h.sessionData.GetSession(sessionTokenCookie.Value))
+	session := *(h.loginSessionData.GetSession(loginSessionTokenCookie.Value))
 	if session == nil {
 		fmt.Println("/access-token request given invalid or expired session token")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	// Verify refresh token exists in session
-	if session.RefreshToken == nil {
-		fmt.Println("/access-token request given session_token for session with no server-side refresh token")
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
 	// Check for expiration
-	if session.AccessToken == nil || session.AccessTokenExpiration.Before(time.Now()) {
+	if session.AccessTokenExpiration.Before(time.Now()) {
 		// Access token expired. Check if refresh token is expired.
 		if session.RefreshTokenExpiration.Before(time.Now()) {
 			// Expired. User must redo auth flow. Send HTTP 401
@@ -710,7 +741,7 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 					"&grant_type=refresh_token&refresh_token=%s",
 				h.githubClientId,
 				h.githubClientSecret,
-				*session.RefreshToken,
+				session.RefreshToken,
 			),
 			nil,
 		)
@@ -749,14 +780,11 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 		}
 		
 		// Store new tokens in session and push to lookup table
-		session.AccessToken = &responseObj.AccessToken
-		accessTokenExpiration := time.Now().Add(time.Duration(responseObj.AccessTokenExpiresIn - 20) * time.Second)
-		session.AccessTokenExpiration = &accessTokenExpiration
-		session.RefreshToken = &responseObj.RefreshToken
-		refreshTokenExpiration := time.Now().Add(time.Duration(responseObj.RefreshTokenExpiresIn - 20) * time.Second)
-		session.RefreshTokenExpiration = &refreshTokenExpiration
-		h.sessionData.UpdateSession(session)
-		err = h.sessionData.UpdateSession(session)
+		session.AccessToken = responseObj.AccessToken
+		session.AccessTokenExpiration = time.Now().Add(time.Duration(responseObj.AccessTokenExpiresIn - 20) * time.Second)
+		session.RefreshToken = responseObj.RefreshToken
+		session.RefreshTokenExpiration = time.Now().Add(time.Duration(responseObj.RefreshTokenExpiresIn - 20) * time.Second)
+		err = h.loginSessionData.UpdateSession(session)
 		if err != nil {
 			// Session disappeared. Perhaps user just logged out suddenly.
 			fmt.Println("/access-token: session was deleted suddenly")
@@ -767,7 +795,7 @@ func (h *HandlerContext) accessTokenHandler(w http.ResponseWriter, r *http.Reque
 
 	// Access token refreshed (or wasn't expired). Send access token
 	payload := AccessTokenResponse{
-		AccessToken: *session.AccessToken,
+		AccessToken: session.AccessToken,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -798,7 +826,7 @@ const htmlContent = `
 // session token cookie)
 func (h *HandlerContext) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	// Get session token cookie
-	sessionTokenCookie, err := r.Cookie("session_token")
+	loginSessionTokenCookie, err := r.Cookie("session_token")
 	if err == nil {
 		// Session token cookie exists. Notify client to delete it.
 		w.Header().Set(
@@ -809,7 +837,7 @@ func (h *HandlerContext) logoutHandler(w http.ResponseWriter, r *http.Request) {
 			),
 		)
 		// Delete sever-side session if it exists.
-		h.sessionData.DeleteSession(sessionTokenCookie.Value)
+		h.authorizingSessionData.DeleteSession(loginSessionTokenCookie.Value)
 	} else if !errors.Is(err, http.ErrNoCookie) {
 		fmt.Println("Internal error: /logout handler failed to retrieve session_token cookie")
 		w.WriteHeader(http.StatusInternalServerError)
