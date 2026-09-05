@@ -1,12 +1,13 @@
 name: Securely dispatch workflow by opening issue
 
 on:
-  workflow_run:
-    workflows: ["Issue Opened Trigger"]
-    types: [completed]
+  issues:
+    types:
+      - opened
 
 jobs:
   securely-dispatch-workflow:
+    if: startsWith(github.event.issue.title, '[securely-dispatch-workflow]')
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -27,6 +28,8 @@ jobs:
       CLASSROOMS_APP_PRIVATE_KEY: ${{ secrets.CLASSROOMS_APP_PRIVATE_KEY }}
       CLASSROOM_RSA_PRIVATE_KEY: ${{ secrets.CLASSROOM_RSA_PRIVATE_KEY }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_EVENT_ISSUE_BODY: ${{ github.event.issue.body }}
+      GITHUB_EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CACHE_AES_KEY: ${{ secrets.CACHE_AES_KEY }}
     permissions:
@@ -34,13 +37,6 @@ jobs:
       issues: write
       actions: write
     steps:
-      - name: Get issue number and body from triggering on-issue-opened workflow 
-        uses: actions/download-artifact@v4
-        with:
-          name: issue-info 
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -79,10 +75,6 @@ jobs:
           
           # TODO more defaults for env vars, and error-handle for missing
           # required vars / secrets
-
-          # Extract github issue number and body from downloaded artifact
-          GITHUB_EVENT_ISSUE_NUMBER=$(cat issue-info.json | jq -j '.issue_number')
-          GITHUB_EVENT_ISSUE_BODY=$(cat issue-info.json | jq -j '.issue_body')
           
           # Use node script to decode issue body and decrypt via
           # CLASSROOM_RSA_PRIVATE_KEY
