@@ -1,0 +1,27 @@
+name: Issue Opened Trigger
+
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  trigger-securely-dispatch-workflow:
+    if: startsWith(github.event.issue.title, '[securely-dispatch-workflow]')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      deployment: false
+    env:
+      GITHUB_EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      GITHUB_EVENT_ISSUE_BODY: ${{ github.event.issue.body }}
+    steps:
+      - name: Prepare issue info JSON
+        run: |
+          echo '{"issue_number": '"$GITHUB_EVENT_ISSUE_NUMBER"', "issue_body": "'"$GITHUB_EVENT_ISSUE_BODY"'"}' > issue-info.json
+
+      - name: Upload issue-info artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-info
+          path: issue-info.json
