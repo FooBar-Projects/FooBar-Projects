@@ -44,7 +44,7 @@ export async function getClassroomsAppInstallationAccessToken() {
     return installationAuth.token;
 }
 
-async function generateAESKey() {
+export async function generateAESKey() {
   const key = await webcrypto.subtle.generateKey(
     {
       name: 'AES-GCM',
@@ -57,7 +57,7 @@ async function generateAESKey() {
   return key;
 }
 
-async function encryptAES(plaintext, key) {
+export async function encryptAES(plaintext, key) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
 
   const ciphertext = await crypto.subtle.encrypt(
@@ -75,7 +75,7 @@ async function encryptAES(plaintext, key) {
   };
 }
 
-async function encryptRSA(plaintext, key) {
+export async function encryptRSA(plaintext, key) {
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: "RSA-OAEP"

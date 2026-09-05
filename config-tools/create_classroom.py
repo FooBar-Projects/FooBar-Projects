@@ -16,6 +16,7 @@ import time
 import textwrap
 import threading
 import os
+import secrets
 from base64 import b64encode
 
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -1252,6 +1253,11 @@ def gen_classroom_keys() -> tuple[str, str]:
     return private_key_b64, public_key_b64
 
 
+def gen_cache_aes_key() -> str:
+    aes_key = secrets.token_bytes(32) # AES-256
+    return b64encode(aes_key).decode('utf-8')
+
+
 def create_repository_variable(
         organization_name: str,
         classroom_setup_token: str,
@@ -1401,7 +1407,8 @@ def create_repository_secret(
 def create_repository_secrets(
         organization_name: str,
         handler_context: HandlerContext,
-        classroom_rsa_private_key: str) -> None:
+        classroom_rsa_private_key: str,
+        cache_aes_key: str) -> None:
     all_secrets = {
         'backend-workflows': [
             ('ASSIGNMENT_CREATION_APP_PRIVATE_KEY',
@@ -1413,6 +1420,7 @@ def create_repository_secrets(
                     handler_context.CLASSROOMS_APP_ENDPOINT
                 ].private_key),
             ('CLASSROOM_RSA_PRIVATE_KEY', classroom_rsa_private_key),
+            ('CACHE_AES_KEY', cache_aes_key),
         ],
     }
     
@@ -1727,6 +1735,7 @@ def main() -> int:
     console.clear()
     
     classroom_rsa_private_key, classroom_rsa_public_key = gen_classroom_keys()
+    cache_aes_key = gen_cache_aes_key()
     create_repository_variables(
         organization_name,
         handler_context,
@@ -1735,7 +1744,8 @@ def main() -> int:
     create_repository_secrets(
         organization_name,
         handler_context,
-        classroom_rsa_private_key
+        classroom_rsa_private_key,
+        cache_aes_key
     )
     populate_repositories(
         organization_name,

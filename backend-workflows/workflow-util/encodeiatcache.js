@@ -1,6 +1,11 @@
+import { webcrypto } from 'crypto';
 import { writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { join } from 'node:path';
+
+import { encryptAES } from './util.js'
 
 async function main() {
     const config = {
@@ -46,16 +51,18 @@ async function main() {
     const iatPayloadJson = JSON.stringify(iatPayload);
     const iatPayloadBuffer = (new TextEncoder('utf-8')).encode(iatPayloadJson);
 
-    const encryptionResult = encryptAES(iatPayloadBuffer, cacheAESKey);
-    const encryptedIatBuffer = encryptionResult.ciphertext;
-    const iv = encryptionResult.iv;
+    const encryptionResult = await encryptAES(iatPayloadBuffer, cacheAESKey);
+    const encryptedIatBuffer = encryptionResult['ciphertext'];
+    const iv = encryptionResult['iv'];
 
     const encryptedIatStructure = {
-        'encryptedIat': encryptedIatBuffer.toBase64(),
-        'iv': iv.toBasae64().
+        'encryptedIat': Buffer.from(encryptedIatBuffer).toString('base64'),
+        'iv': Buffer.from(iv).toString('base64')
     };
     const encryptedIatStructureJson = JSON.stringify(encryptedIatStructure);
 
+    const parentDir = path.dirname(values.file);
+    await fs.mkdir(parentDir, { recursive: true });
     await writeFile(values.file, encryptedIatStructureJson, 'utf8');
 }
 

@@ -1,6 +1,9 @@
+import { webcrypto } from 'crypto';
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { join } from 'node:path';
+
+import { decryptAES } from './util.js'
 
 async function main() {
     const config = {
