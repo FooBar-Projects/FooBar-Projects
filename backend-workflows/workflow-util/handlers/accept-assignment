@@ -54,12 +54,28 @@ STUDENT_ASSIGNMENT_REPO="${ASSIGNMENT_NAME}-${STUDENT_USERNAME}"
 # Replace forbidden characters with hyphens
 export STUDENT_ASSIGNMENT_REPO=$(echo -n "$STUDENT_ASSIGNMENT_REPO" | sed 's/[^a-zA-Z0-9_\.-]/-/g')
 
-# Get installation access token for assignment creation app
-assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
+# If installation access tokens weren't pulled from cache / were expired, get
+# new ones and cache them
+if [[ "$assignment_creation_app_installation_access_token" == "" ]]
+then
+  assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
+  # Expire from cache 1 minute early to avoid mid-workflow expiration
+  expiration=$(date -d "+ 59 minutes" --iso-8601=seconds)
+  node repo/workflow-util/encodeiatcache.js -t "$assignment_creation_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json"
+else
+  echo "Assignment creation app IAT pulled from cache"
+fi
 echo "::add-mask::${assignment_creation_app_installation_access_token}"
 
-# Get installation access token for classrooms app
-classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
+if [[ "$classrooms_app_installation_access_token" == "" ]]
+then
+  classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
+  # Expire from cache 1 minute early to avoid mid-workflow expiration
+  expiration=$(date -d "+ 59 minutes" --iso-8601=seconds)
+  node repo/workflow-util/encodeiatcache.js -t "$classrooms_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/classrooms-app-installation-access-token.json"
+else
+  echo "Classrooms app IAT pulled from cache"
+fi
 echo "::add-mask::${classrooms_app_installation_access_token}"
 
 # Clone classrooms repo

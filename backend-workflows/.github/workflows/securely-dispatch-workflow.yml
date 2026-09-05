@@ -45,6 +45,13 @@ jobs:
         run: |
           npm i
 
+      - name: Get cached app installation access tokens
+        id: cache-access-tokens
+        uses: actions/cache@v6
+        with:
+          path: cached-app-access-tokens/
+          key: cached-app-access-tokens
+
       - name: Securely dispatch workflow
         run: |
           # Defaults for environment variables
@@ -100,6 +107,17 @@ jobs:
           # comment and result payload
           export RESULT_ENCRYPTION_KEY
 
+          # Get app installation access tokens from cache if present and
+          # not expired
+          if [[ -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json" ]]
+          then
+            assignment_creation_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json")
+          fi
+          if [[ -f "cached-app-access-tokens/classrooms-app-installation-access-token.json" ]]
+          then
+            classrooms_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/classrooms-app-installation-access-token.json")
+          fi
+          
           # Prepare result directory
           mkdir -p result
           rm -rf result/*
