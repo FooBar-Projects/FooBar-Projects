@@ -48,11 +48,14 @@ jobs:
           npm i
 
       - name: Get cached app installation access tokens
-        id: cache-access-tokens
-        uses: actions/cache@v6
+        uses: dawidd6/action-download-artifact@v9
+        continue-on-error: true
         with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: securely-dispatch-workflow.yml
+          name: cached-app-access-tokens
+          branch: main
           path: cached-app-access-tokens/
-          key: cached-app-access-tokens
 
       - name: Securely dispatch workflow
         run: |
@@ -113,11 +116,11 @@ jobs:
           # not expired
           if [[ -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json" ]]
           then
-            assignment_creation_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json")
+            export assignment_creation_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json")
           fi
           if [[ -f "cached-app-access-tokens/classrooms-app-installation-access-token.json" ]]
           then
-            classrooms_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/classrooms-app-installation-access-token.json")
+            export classrooms_app_installation_access_token=$(node repo/workflow-util/decodeiatcache.js -f "cached-app-access-tokens/classrooms-app-installation-access-token.json")
           fi
           
           # Prepare result directory
@@ -192,3 +195,10 @@ jobs:
           name: result
           path: result/
           retention-days: 1
+
+      - name: Upload installation access tokens as cache artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cached-app-access-tokens
+          path: cached-app-access-tokens/
+          if-no-files-found: ignore
