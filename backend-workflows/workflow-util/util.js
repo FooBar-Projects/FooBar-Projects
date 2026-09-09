@@ -44,6 +44,25 @@ export async function getClassroomsAppInstallationAccessToken() {
     return installationAuth.token;
 }
 
+export async function getRepoAccessToken(
+        repositoryName,
+        accessTokenPermissions) {
+    const auth = createAppAuth({
+      appId: process.env.REPO_ACCESS_TOKEN_APP_ID,
+      privateKey: process.env.REPO_ACCESS_TOKEN_APP_PRIVATE_KEY,
+    });
+
+    // Retrieve the raw installation access token
+    const installationAuth = await auth({
+      type: "installation",
+      installationId: Number(process.env.REPO_ACCESS_TOKEN_APP_INSTALLATION_ID),
+      repositoryNames: [repositoryName],
+      permissions: accessTokenPermissions
+    });
+
+    return installationAuth.token;
+}
+
 export async function generateAESKey() {
   const key = await webcrypto.subtle.generateKey(
     {

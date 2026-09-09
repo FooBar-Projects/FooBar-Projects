@@ -228,6 +228,7 @@ async function acceptAssignment(organizationName, accessToken, accessTokenOctoki
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    console.log('Page loaded'); // TODO remove
     const urlParams = new URLSearchParams(window.location.search);
     const assignmentName = urlParams.get('assignment-name');
     const assignmentAcceptKey = urlParams.get('assignment-accept-key');
@@ -302,5 +303,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const responseDataJson = await acceptResults.zip.files['result/data.json'].async('string');
     const responseData = JSON.parse(responseDataJson);
 
-    window.location.replace(responseData.repositoryURL);
+    if (Object.hasOwn(responseData, 'repositoryAccessToken')) {
+        // Store repository access token and repo remote URL in window globals
+        // so that browser automation tool can grab them
+        window.repositoryAccessToken = responseData.repositoryAccessToken;
+        window.repositoryRemoteURL = responseData.repositoryRemoteURL;
+        console.log(`repositoryAccessToken: retrieved`);
+    } else if (Object.hasOwn(responseData, 'repositoryURL')) {
+        // TODO give redirect button if repositoryURL and repositoryAccessToken are both present
+        window.location.replace(responseData.repositoryURL);
+    }
 });

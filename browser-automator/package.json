@@ -1,0 +1,15 @@
+{
+  "name": "browser-automator",
+  "version": "1.0.0",
+  "description": "Automates Chromium or Chrome to accept assignment, retrieve repository access token, clone / fetch repository, and store access token in git credential.helper cache",
+  "license": "MIT",
+  "author": "FooBar Projects",
+  "type": "module",
+  "main": "accept-assignment.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "puppeteer": "^25.10.0"
+  }
+}

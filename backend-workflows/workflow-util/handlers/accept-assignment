@@ -21,6 +21,13 @@ export CLASSROOMS_APP_PRIVATE_KEY
 rm -f private-key-pkcs1.pem
 rm -f classrooms-app-private-key.pem
 
+echo "$REPO_ACCESS_TOKEN_APP_PRIVATE_KEY" > private-key-pkcs1.pem
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in private-key-pkcs1.pem -out repo-access-token-app-private-key.pem
+IFS= read -r -d '' REPO_ACCESS_TOKEN_APP_PRIVATE_KEY < repo-access-token-app-private-key.pem || true
+export REPO_ACCESS_TOKEN_APP_PRIVATE_KEY
+rm -f private-key-pkcs1.pem
+rm -f repo-access-token-app-private-key.pem
+
 # Mask assignment accept key in logs
 echo "::add-mask::${ASSIGNMENT_ACCEPT_KEY}"
 
@@ -58,23 +65,23 @@ export STUDENT_ASSIGNMENT_REPO=$(echo -n "$STUDENT_ASSIGNMENT_REPO" | sed 's/[^a
 # new ones and cache them
 if [[ "$assignment_creation_app_installation_access_token" == "" ]]
 then
-  assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
-  # Expire from cache 5 minutes early to avoid mid-workflow expiration
-  expiration=$(date -d "+ 55 minutes" --iso-8601=seconds)
-  node repo/workflow-util/encodeiatcache.js -t "$assignment_creation_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json"
+    assignment_creation_app_installation_access_token=$(node repo/workflow-util/getassignmentcreationappinstallationaccesstoken.js)
+    # Expire from cache 5 minutes early to avoid mid-workflow expiration
+    expiration=$(date -d "+ 55 minutes" --iso-8601=seconds)
+    node repo/workflow-util/encodeiatcache.js -t "$assignment_creation_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/assignment-creation-app-installation-access-token.json"
 else
-  echo "Assignment creation app IAT pulled from cache"
+    echo "Assignment creation app IAT pulled from cache"
 fi
 echo "::add-mask::${assignment_creation_app_installation_access_token}"
 
 if [[ "$classrooms_app_installation_access_token" == "" ]]
 then
-  classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
-  # Expire from cache 5 minutes early to avoid mid-workflow expiration
-  expiration=$(date -d "+ 55 minutes" --iso-8601=seconds)
-  node repo/workflow-util/encodeiatcache.js -t "$classrooms_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/classrooms-app-installation-access-token.json"
+    classrooms_app_installation_access_token=$(node repo/workflow-util/getclassroomsappinstallationaccesstoken.js)
+    # Expire from cache 5 minutes early to avoid mid-workflow expiration
+    expiration=$(date -d "+ 55 minutes" --iso-8601=seconds)
+    node repo/workflow-util/encodeiatcache.js -t "$classrooms_app_installation_access_token" -e "$expiration" -f "cached-app-access-tokens/classrooms-app-installation-access-token.json"
 else
-  echo "Classrooms app IAT pulled from cache"
+    echo "Classrooms app IAT pulled from cache"
 fi
 echo "::add-mask::${classrooms_app_installation_access_token}"
 
@@ -108,8 +115,8 @@ then
     exit 0
 fi
 
-# Get classroom's configured timezone UTC offset and sections that this
-# student is assigned to
+# Get classroom's configured timezone UTC offset, sections that this
+# student is assigned to, and repo access token permissions
 timezone_utc_offset="+00:00"
 student_assigned_sections="[]"
 if [[ -f "classrooms-repo/classroom.conf" ]]
@@ -122,6 +129,7 @@ then
 
     student_assigned_sections=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq 'if (.roster != null) then .roster else [] end | .[] | select((.github_username | ascii_downcase) == ("'"$STUDENT_USERNAME"'" | ascii_downcase))' | jq -s 'if (length > 0) then .[0] else {} end | if (.sections != null) then .sections else [] end')
     all_section_data=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq 'if (.sections != null) then .sections else [] end')
+    repo_access_token_permissions_json=$(cat "classrooms-repo/classroom.conf" | yq -o json | jq -j 'if (.repo_access_token_permissions != null) then .repo_access_token_permissions else "" end')
 fi
 
 # Read assignment config as JSON string
@@ -192,6 +200,18 @@ function merge_in_config_json() {
     then
         assignment_unrelease_at_section_end=$(echo "$1" | jq -j '.unrelease_at_section_end')
     fi
+
+    has_field=$(echo "$1" | jq -j '.accept_generates_invite != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_accept_generates_invite=$(echo "$1" | jq -j '.accept_generates_invite')
+    fi
+
+    has_field=$(echo "$1" | jq -j '.accept_generates_repo_access_token != null')
+    if [[ "$has_field" == "true" ]]
+    then
+        assignment_accept_generates_repo_access_token=$(echo "$1" | jq -j '.accept_generates_repo_access_token')
+    fi
 }
 
 # Record success in finding valid config under which assignment
@@ -210,6 +230,8 @@ do
     assignment_unrelease_at=""
     assignment_release_at_section_start="false"
     assignment_unrelease_at_section_end="false"
+    assignment_accept_generates_invite="true"
+    assignment_accept_generates_repo_access_token="false"
 
     # If assignment config is present, merge in top-level config
     if [[ "$assignment_config" != "" ]]
@@ -459,18 +481,43 @@ then
     exit 1
 fi
 
-# Check if student already has access to repository.
-get_collaborator_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer ${USER_ACCESS_TOKEN}" \
-    -H "X-GitHub-Api-Version: 2026-03-10" \
-    "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/collaborators/$STUDENT_USERNAME")
-if [[ "$get_collaborator_status" == "404" ]]
+if [[ "$assignment_accept_generates_invite" == "true" ]]
 then
-    # User is not a collaborator. We may need to add them, but first we have
-    # to check if this repo was previously created and registered under a
-    # different student's ID.
-    # Get STUDENT_ID repository variable if it exists
+    # Accept generates invite.
+    # Check if student already has access to repository.
+    get_collaborator_status=$(curl -s -o /dev/null -w "%{http_code}" -L \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${USER_ACCESS_TOKEN}" \
+        -H "X-GitHub-Api-Version: 2026-03-10" \
+        "https://api.github.com/repos/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}/collaborators/$STUDENT_USERNAME")
+    if [[ "$get_collaborator_status" == "404" ]]
+    then
+        # User is not a collaborator. Record that we may need to add them.
+        student_needs_invite=1
+    elif [[ "$get_collaborator_status" != "204" ]]
+    then
+        # HTTP 204 means already a collaborator, 404 means not a
+        # collaborator. Anything else is an error.
+        echo "Error: Got HTTP status $get_collaborator_status when checking if student is a collaborator on their assignment repository" >&2
+        exit 1
+    fi
+
+fi
+
+if [[ "$assignment_accept_generates_repo_access_token" == "true" ]]
+then
+    # Accept generates repo access token. Record that it needs to be
+    # generated (these tokens are per-student-repo and are cached strictly by
+    # the frontend, so they're regenerated on every request)
+    student_needs_repo_access_token=1
+fi
+
+# If student needs any form of assignment access, before we can grant it to
+# them, we first have to check if this repo was previously created and
+# registered under a different student's ID. Get STUDENT_ID repository variable
+# if it exists
+if [[ "$student_needs_invite" == 1 || "$student_needs_repo_access_token" == 1 ]]
+then
     get_student_id_status=$(curl -s -o curl.json -w "%{http_code}" -L \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer ${assignment_creation_app_installation_access_token}" \
@@ -500,7 +547,7 @@ then
             exit 1
         fi
     fi
-    
+        
     # Verify that current authenticated user's ID matches that of student
     # registered for repository
     if [[ "$STUDENT_ID" != "$AUTHENTICATED_STUDENT_ID" ]]
@@ -515,7 +562,13 @@ then
         echo -n '{"status": "duplicate-username"}' > result/status.json
         exit 0
     fi
-    
+fi
+
+# If we made it this far, all checks have passed. Student can be granted
+# access to repo if necessary.
+
+if [[ "$student_needs_invite" == 1 ]]
+then
     # Send invite to add student as outside collaborator for repo, or add
     # as collaborator directly under certain conditions (e.g., if they're
     # a member of the organization, or a member of a team that's already
@@ -542,16 +595,44 @@ then
         echo "Error: Got HTTP status $add_collaborator_status when adding student as collaborator to their assignment repository" >&2
         exit 1
     fi
-elif [[ "$get_collaborator_status" != "204" ]]
+fi
+
+if [[ "$student_needs_repo_access_token" == 1 ]]
 then
-    # HTTP 204 means already a collaborator, 404 means not a
-    # collaborator. Anything else is an error.
-    echo "Error: Got HTTP status $get_collaborator_status when checking if student is a collaborator on their assignment repository" >&2
-    exit 1
+    echo "Generating repo access token" # TODO remove
+    if [[ "$repo_access_token_permissions_json" != "" ]]
+    then
+        repo_access_token=$(node repo/workflow-util/getrepoaccesstoken.js -r "$STUDENT_ASSIGNMENT_REPO" -p "$repo_access_token_permissions_json")
+    else
+        repo_access_token=$(node repo/workflow-util/getrepoaccesstoken.js -r "$STUDENT_ASSIGNMENT_REPO")
+    fi
+else
+    echo "Not generating repo access token" # TODO remove
 fi
 
 # Store result
 student_repository_url="https://${STUDENT_PLATFORM_GIT_HOSTNAME}/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}"
-echo -n '{"repositoryURL": "'"$student_repository_url"'"}' > result/data.json
+echo -n '{' > result/data.json
+if [[ "$assignment_accept_generates_invite" == "true" ]]
+then
+    if [[ "$needs_commas" == 1 ]]
+    then
+        echo -n ',' >> result/data.json
+    fi
+    needs_commas=1
+    echo -n '"repositoryURL": "'"$student_repository_url"'"' >> result/data.json
+fi
+if [[ "$repo_access_token" != "" ]]
+then
+    echo "Adding in repo access token" # TODO remove
+    if [[ "$needs_commas" == 1 ]]
+    then
+        echo -n ',' >> result/data.json
+    fi
+    needs_commas=1
+    echo -n '"repositoryAccessToken": "'"$repo_access_token"'"' >> result/data.json
+    echo -n ',"repositoryRemoteURL": "'"https://${ASSIGNMENT_CREATION_USERNAME}:${repo_access_token}@${STUDENT_PLATFORM_GIT_HOSTNAME}/${STUDENT_ASSIGNMENT_ORGANIZATION}/${STUDENT_ASSIGNMENT_REPO}.git"'"' >> result/data.json
+fi
+echo -n '}' >> result/data.json
 echo -n '{"status": "success"}' > result/status.json
 exit 0
