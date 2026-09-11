@@ -228,7 +228,6 @@ async function acceptAssignment(organizationName, accessToken, accessTokenOctoki
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('Page loaded'); // TODO remove
     const urlParams = new URLSearchParams(window.location.search);
     const assignmentName = urlParams.get('assignment-name');
     const assignmentAcceptKey = urlParams.get('assignment-accept-key');
@@ -310,7 +309,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.repositoryRemoteURL = responseData.repositoryRemoteURL;
         console.log(`repositoryAccessToken: retrieved`);
     } else if (Object.hasOwn(responseData, 'repositoryURL')) {
-        // TODO give redirect button if repositoryURL and repositoryAccessToken are both present
         window.location.replace(responseData.repositoryURL);
     }
 });
