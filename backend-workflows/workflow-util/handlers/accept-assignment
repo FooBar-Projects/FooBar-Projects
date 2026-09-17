@@ -463,7 +463,7 @@ then
     if [[ "$assignment_template_exists" == 1 ]]
     then
         mkdir -p "$STUDENT_ASSIGNMENT_REPO"
-        cp -R classrooms-repo/assignments/"$ASSIGNMENT_NAME"/* "$STUDENT_ASSIGNMENT_REPO"
+        cp -a classrooms-repo/assignments/"$ASSIGNMENT_NAME"/. "$STUDENT_ASSIGNMENT_REPO"
         (
             cd "$STUDENT_ASSIGNMENT_REPO"
             git init -b main
