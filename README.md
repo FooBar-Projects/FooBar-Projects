@@ -1,8 +1,18 @@
+# Disclaimer
+
+This repository is a WIP. It's not ready for production deployments yet.
+
 # FooBar Projects
 
 FooBar Projects is a free and open-source, lightweight, **self-hosted** (serverless) replacement for GitHub Classroom. It distributes programming assignments to students while keeping all the data under the ownership of the instructor.
 
 All data is stored, and backend operations are performed, within repositories under the classroom's GitHub Organization. The organization does not require a paid plan; an organization on a GitHub Free plan is sufficient. 
+
+## Backends
+
+Currently, the only available backend is the GitHub Actions backend. If using this backend, whenever a student accepts an assignment, a GitHub Actions workflow is dipsatched to generate their assignment repository. This is quite slow and ventures into a gray area of the GitHub Actions service usage limitations.
+
+An alternative Serverless Cloud Function backend is currently under development. When complete, it will be the primary backend of choice. It will require a Google Cloud Platform account and the `gcloud` CLI.
 
 ## Setting up a classroom organization
 
@@ -27,9 +37,7 @@ A classroom's configuration, assignment configurations, and assignment templates
 
 ## Self-hosted runners
 
-FooBar Projects uses GitHub Actions workflows in the `backend-workflows` repository as a serverless backend. By default, these workflows run on GitHub-hosted runners (`ubuntu-latest`). Since these workflows execute for some semi-frequent user-facing operations (e.g., accepting assignments), they can rack up a lot of GitHub Actions minutes, especially in large classes with many (e.g., hundreds of) students. GitHub Actions minutes are only free up to a certain per-organization limit depending on the organization's plan (2,000 minutes per month for Free plans; 3,000 for Team plans). Moreover, GitHub-hosted runners can be slow for a couple reasons: 1) there can sometimes be significant resource contention for GitHub-hosted runners, resulting in long pending times; and 2) GitHub-hosted runners are ephemeral with each job running in an isolated environment, which means they must reinstall all necessary dependencies (beyond what ships standard with the selected runner) at the start of each job execution.
-
-For these reasons, if possible, it's advised that instructors consider using one or more self-hosted runners for workflows in the `backend-workflows` repository. This would make all backend operations within the classroom faster *and* free, regardless of the number of Actions minutes used (there's currently no limit to the number of free Actions minutes available for self-hosted runners, even on a GitHub Organization Free plan). However, there are some security concerns to be aware of when using self-hosted runners in public repositories. If you use self-hosted runners, enable the option to "Require approval for all outside collaborators" in the Actions settings of your `backend-workflows` repository, and do not introduce new workflows that run on a `pull_request` trigger.
+If using the (not-recommended) GitHub Actions backend, which resides in a gray area of the GitHub Actions service usage limitations, it's imperative to at least set up one or more self-hosted runners with the `ubuntu-latest` label. This will offload most of the backend's compute and network resources away from GitHub's cloud-hosted runners and onto your own. It may also reduce workflow pending times and, depending on your self-hosted runners' configuration, execution times (e.g., by pre-installing all necessary packages).
 
 See [the GitHub docs](https://docs.github.com/en/actions/concepts/runners/self-hosted-runners) for more information on how to configure self-hosted runners.
 
@@ -46,14 +54,7 @@ In Classroom 50, students are added to the classroom organization and then assig
 - Students are generally given admin access to their assignment repositories since their user access tokens are used to create them (though, the permissions of a repository admin can be adjusted as a part of organization hardening).
 - In general, certain features (e.g., those requiring authorization by protected secrets) are simply impossible to implement without a programmable backend, hence the above limitations.
 
-GitHub Classroom avoided these issues by hiding privileged operations behind a central backend. FooBar Projects's design philosophy is similar to GitHub Classroom's in this regard, but rather than lean on a central backend server, FooBar Projects exploits GitHub Actions workflows as a sort of serverless backend. By default, students are not given direct access to private assignment templates (templates are instantiated centrally by FooBar Projects on the student's behalf upon clicking a link provided at the instructor's discretion); students are not admins of their own assignment repositories; and students do not need to be members of the classroom's GitHub organization. However, all these things can be reconfigured if desired.
-
-(Classroom 50 uses a similar workflow-as-a-backend design for some infrequent teacher-facing operations like collecting scores and re-running autograders, but not for semi-frequent student-facing operations like accepting assignments and completing the OAuth flow.)
-
-> [!NOTE]
-> Although workflow runs in the `backend-workflows` repository are public-readable, all workflow run inputs are encrypted using the target classroom's public RSA encryption key. The corresponding private decryption key is stored as a GitHub Actions secret in the `backend-workflows` repository. Similarly, all workflow run outputs are encrypted using a public RSA encryption key provided by the requesting client alongside the workflow inputs. The corresponding private decryption key is held strictly by the requesting client.
-
-The major downside to FooBar Projects's design is that GitHub Actions workflows are asynchronous and event-driven; they're not designed for handling frequent, synchronous, short-lived, user-facing operations, but FooBar Projects uses them for such purposes anyways. This design introduces an intentional tradeoff: it makes backend operations (e.g., accepting assignments) a bit slow, and it can rack up a lot of GitHub Actions minutes, but it enables certain centralized features while simultaneously keeping things serverless and easy to self-host. (Note that backend operations can be sped up signficantly by [using self-hosted runners](#self-hosted-runners).)
+GitHub Classroom avoided these issues by hiding privileged operations behind a central backend. FooBar Projects's design philosophy is similar to GitHub Classroom's in this regard, but there are [multiple options for backends](#backends), and they're all serverless (e.g., cloud functions or GitHub Actions workflows) and self-hosted. The choice of backend is decided when creating the classroom via `create_classroom.py`, which automates the backend's deployment.
 
 One final difference between Classroom 50 and FooBar Projects is that Classroom 50 requires a GitHub Organization on a Team or Enterprise plan, whereas FooBar Projects works with Free plans as well. However, if you're using an organization with a Free plan, you won't be able to configure branch protection rules or push rulesets in students' assignment repositories, and you'll be restricted to 2,000 Actions minutes per month if using GitHub-hosted runners.
 
