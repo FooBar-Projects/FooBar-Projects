@@ -4,6 +4,14 @@ import * as util from '@/js/util.js'
 import * as cloudFunctionUtil from '@/js/cloud-function-util.js'
 import siteConfig from '@/config/conf.yaml'
 
+function resetProgress() {
+    const redirectingContentContainer = document.getElementById('redirecting-content-container');
+    const loadingContentContainer = document.getElementById('loading-content-container');
+
+    redirectingContentContainer.style.display = 'none';
+    loadingContentContainer.style.display = 'block';
+}
+
 function showError(message) {
     const loadingContentContainer = document.getElementById('loading-content-container');
     const errorContentContainer = document.getElementById('error-content-container');
@@ -50,10 +58,11 @@ async function acceptAssignment(accessToken, accessTokenOctokit, assignmentName,
     let succeeded = false;
     let acceptAssignmentResponse;
     while (failedAuth < 2 && !succeeded) {
+        resetProgress();
         let acceptAssignmentRequestInputs = {
             'user_access_token': accessToken,
             'assignment_name': assignmentName
-        }
+        };
         if (assignmentAcceptKey !== null) {
             acceptAssignmentRequestInputs['assignment_accept_key'] = assignmentAcceptKey;
         }

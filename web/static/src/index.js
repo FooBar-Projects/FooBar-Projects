@@ -102,7 +102,7 @@ async function acceptAssignment(organizationName, accessToken, accessTokenOctoki
         let workflowInputs = {
             'userAccessToken': accessToken,
             'assignmentName': assignmentName
-        }
+        };
         if (assignmentAcceptKey !== null) {
             workflowInputs['assignmentAcceptKey'] = assignmentAcceptKey;
         }

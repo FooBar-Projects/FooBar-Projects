@@ -65,7 +65,7 @@ jobs:
           # Defaults for environment variables
           if [[ "$CLASSROOMS_REPO" == "" ]]
           then
-              export CLASSROOMS_REPO="github.com/$GITHUB_REPOSITORY.git"
+              export CLASSROOMS_REPO="github.com/${{ github.repository_owner }}/classrooms.git"
           fi
 
           if [[ "$STUDENT_PLATFORM_GIT_HOSTNAME" == "" && "$STUDENT_PLATFORM" == "github" ]]

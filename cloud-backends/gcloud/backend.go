@@ -34,7 +34,8 @@ func fetch[TRequest any, TResponse any](
 		url string,
 		method string,
 		headers map[string]string,
-		requestBody *TRequest) (*int, *TResponse, error) {
+		requestBody *TRequest,
+		responseBody *TResponse) (*int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -42,8 +43,8 @@ func fetch[TRequest any, TResponse any](
 	if requestBody != nil {
 		bodyJson, err := json.Marshal(requestBody)
 		if err != nil {
-			fmt.Printf("Error marshaling request body to JSON: %v\n", err)
-			return nil, nil, err
+			log.Printf("Error marshaling request body to JSON: %v\n", err)
+			return nil, err
 		}
 
 		bodyReader = bytes.NewBuffer(bodyJson)
@@ -51,8 +52,8 @@ func fetch[TRequest any, TResponse any](
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
-		fmt.Printf("Error creating request: %v\n", err)
-		return nil, nil, err
+		log.Printf("Error creating request: %v\n", err)
+		return nil, err
 	}
 
 	for headerName := range headers {
@@ -62,29 +63,31 @@ func fetch[TRequest any, TResponse any](
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Printf("Error making request: %v\n", err)
-		return nil, nil, err
+		log.Printf("Error making request: %v\n", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	statusCode := resp.StatusCode
 
-	var responseBody TResponse
-	err = json.NewDecoder(resp.Body).Decode(&responseBody)
-	if err != nil {
-		fmt.Printf("Error parsing response body: %v\n", err)
-		return nil, nil, err
+	if responseBody != nil {
+		err = json.NewDecoder(resp.Body).Decode(responseBody)
+		if err != nil {
+			log.Printf("Error parsing response body: %v\n", err)
+			return nil, err
+		}
 	}
 
-	return &statusCode, &responseBody, nil
+	return &statusCode, nil
 }
 
 func githubRestRequest[TRequest any, TResponse any](
 		url string,
 		method string,
 		token *string,
-		headers *map[string]string,
-		requestBody *TRequest) (*int, *TResponse, error) {
+		headers map[string]string,
+		requestBody *TRequest,
+		responseBody *TResponse) (*int, error) {
 	allHeaders := make(map[string]string)
 	allHeaders["Accept"] = "application/vnd.github+json"
 	allHeaders["X-GitHub-Api-Version"] = "2026-03-10"
@@ -92,14 +95,12 @@ func githubRestRequest[TRequest any, TResponse any](
 		allHeaders["Authorization"] = fmt.Sprintf("Bearer %s", *token)
 	}
 
-	if headers != nil {
-		for headerName := range (*headers) {
-			headerValue, _ := (*headers)[headerName]
-			allHeaders[headerName] = headerValue
-		}
+	for headerName := range headers {
+		headerValue, _ := headers[headerName]
+		allHeaders[headerName] = headerValue
 	}
 	
-	return fetch[TRequest, TResponse](url, method, allHeaders, requestBody)
+	return fetch[TRequest, TResponse](url, method, allHeaders, requestBody, responseBody)
 }
 
 func GenerateJWT(appId string, privateKeyPem[]byte) (*string, error) {
@@ -109,8 +110,9 @@ func GenerateJWT(appId string, privateKeyPem[]byte) (*string, error) {
 	}
 
 	issuedAt := time.Now().Add(-1 * time.Minute)
-	expirationTime := issuedAt.Add(60 * time.Minute)
-	claims := &jwt.RegisteredClaims{
+	expirationTime := issuedAt.Add(10 * time.Minute)
+	log.Printf("App ID: %s\n", appId)
+	claims := jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(expirationTime),
 		IssuedAt: jwt.NewNumericDate(issuedAt),
 		Issuer: appId,
@@ -166,7 +168,8 @@ func CreateIAT(
 			Repositories: repositories,
 		}
 	}
-	createIATResponseStatus, createIATResponse, err :=
+	var createIATResponse CreateIATResponse
+	createIATResponseStatus, err :=
 		githubRestRequest[CreateIATRequest, CreateIATResponse](
 			fmt.Sprintf(
 				"https://api.github.com/app/installations/%s/access_tokens",
@@ -176,6 +179,7 @@ func CreateIAT(
 			jwt,
 			nil,
 			createIATRequest,
+			&createIATResponse,
 		)
 	
 	if err != nil {
@@ -183,7 +187,7 @@ func CreateIAT(
 	}
 
 	if *createIATResponseStatus != 201 {
-		return nil, errors.New("Failed to create installation access token")
+		return nil, errors.New(fmt.Sprintf("Failed to create installation access token. HTTP status %d", *createIATResponseStatus))
 	}
 
 	expirationTime, err := time.Parse(
@@ -366,16 +370,19 @@ func acceptAssignment(
 		Login string `json:"login"`
 		Id int `json:"id"`
 	}
-	getUserResponseStatus, getUserResponse, err :=
+	var getUserResponse GetUserResponse
+	getUserResponseStatus, err :=
 		githubRestRequest[NoBody, GetUserResponse](
 			"https://api.github.com/user",
 			"GET",
 			&userAccessToken,
 			nil,
 			nil,
+			&getUserResponse,
 		)
 	
 	if err != nil {
+		log.Println(err)
 		http.Error(*w, "Failed to get GitHub user information", http.StatusInternalServerError)
 		return
 	}
@@ -393,17 +400,19 @@ func acceptAssignment(
 	}
 
 	studentUsername := getUserResponse.Login
-	authenticatedStudentId := getUserResponse.Id
+	authenticatedStudentId := strconv.Itoa(getUserResponse.Id)
 	
 	studentAssignmentRepository := fmt.Sprintf("%s-%s", assignmentName, studentUsername)
 
 	classroomsAppIAT, err := ctx.ClassroomsAppIAT()
 	if err != nil {
+		log.Println(err)
 		http.Error(*w, "Failed to generate installation access tokens", http.StatusInternalServerError)
 		return
 	}
 	assignmentCreationAppIAT, err := ctx.AssignmentCreationAppIAT()
 	if err != nil {
+		log.Println(err)
 		http.Error(*w, "Failed to generate installation access tokens", http.StatusInternalServerError)
 		return
 	}
@@ -412,7 +421,7 @@ func acceptAssignment(
 	cloneResult, err := git.PlainClone(
 		filepath.Join(workdir, "classrooms-repo"),
 		&git.CloneOptions{
-			URL: fmt.Sprintf("https://%s.git", ctx.ClassroomsRepository),
+			URL: fmt.Sprintf("https://%s", ctx.ClassroomsRepository),
 			Depth: 1,
 			Progress: os.Stdout,
 			ClientOptions: []gitClient.Option{
@@ -424,6 +433,7 @@ func acceptAssignment(
 		},
 	)
 	if err != nil {
+		log.Println(err)
 		http.Error(*w, "Failed to clone classrooms repository", http.StatusInternalServerError)
 		return
 	}
@@ -477,12 +487,14 @@ func acceptAssignment(
 			"classrooms-repo/assignments/assignments.conf",
 		))
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to read assignments configuration", http.StatusInternalServerError)
 			return
 		}
 		var assignmentConfigurations []AssignmentConfiguration
 		err = yaml.Unmarshal(yamlFile, &assignmentConfigurations)
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to parse assignments configuration", http.StatusInternalServerError)
 			return
 		}
@@ -546,11 +558,13 @@ func acceptAssignment(
 			"classrooms-repo/classroom.conf",
 		))
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to read classroom configuration", http.StatusInternalServerError)
 			return
 		}
 		err = yaml.Unmarshal(yamlFile, &classroomConfiguration)
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to parse classroom configuration", http.StatusInternalServerError)
 			return
 		}
@@ -996,7 +1010,7 @@ func acceptAssignment(
 
 	// Check if student assignment repository already exists.
 	repoFreshlyCreated := false
-	getRepositoryResponseStatus, _, err :=
+	getRepositoryResponseStatus, err :=
 		githubRestRequest[NoBody, NoBody](
 			fmt.Sprintf(
 				"https://api.github.com/repos/%s/%s",
@@ -1007,8 +1021,10 @@ func acceptAssignment(
 			assignmentCreationAppIAT,
 			nil,
 			nil,
+			nil,
 		)
 	if err != nil {
+		log.Println(err)
 		http.Error(*w, "Failed to get student assignment repository information", http.StatusInternalServerError)
 		return
 	}
@@ -1021,7 +1037,7 @@ func acceptAssignment(
 			Description string `json:"description"`
 			Private bool `json:"private"`
 		}
-		createRepoResponseStatus, _, err :=
+		createRepoResponseStatus, err :=
 			githubRestRequest[CreateRepoRequest, NoBody](
 				fmt.Sprintf(
 					"https://api.github.com/orgs/%s/repos",
@@ -1039,8 +1055,10 @@ func acceptAssignment(
 					),
 					Private: true,
 				},
+				nil,
 			)
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to create student assignment repository", http.StatusInternalServerError)
 			return
 		}
@@ -1052,7 +1070,7 @@ func acceptAssignment(
 			http.Error(*w, "Got HTTP status 422 when generating assignment repository", http.StatusInternalServerError)
 			return
 		} else if *createRepoResponseStatus != 201 {
-			http.Error(*w, fmt.Sprintf("Got HTTP status %d when generating assignment repository", createRepoResponseStatus), http.StatusInternalServerError)
+			http.Error(*w, fmt.Sprintf("Got HTTP status %d when generating assignment repository", *createRepoResponseStatus), http.StatusInternalServerError)
 			return
 		}
 
@@ -1081,6 +1099,7 @@ func acceptAssignment(
 				},
 			)
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to clone student assignment repository", http.StatusInternalServerError)
 				return
 			}
@@ -1096,6 +1115,7 @@ func acceptAssignment(
 				filepath.Join(workdir, studentAssignmentRepository),
 			)
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to copy assignment template into local student repository", http.StatusInternalServerError)
 				return
 			}
@@ -1103,6 +1123,7 @@ func acceptAssignment(
 			// Stage all files, commit, and push
 			repository, err := git.PlainOpen(filepath.Join(workdir, studentAssignmentRepository))
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to open local student assignment Git repository", http.StatusInternalServerError)
 				return
 			}
@@ -1110,12 +1131,14 @@ func acceptAssignment(
 
 			worktree, err := repository.Worktree()
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to open local student assignment Git repository", http.StatusInternalServerError)
 				return
 			}
 
 			_, err = worktree.Add(".")
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to stage copied template files", http.StatusInternalServerError)
 				return
 			}
@@ -1128,18 +1151,20 @@ func acceptAssignment(
 				},
 			})
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to create commit with assignment template contents", http.StatusInternalServerError)
 				return
 			}
 
 			err = repository.Push(&git.PushOptions{})
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to push assignment template contents", http.StatusInternalServerError)
 				return
 			}
 		}
 	} else if *getRepositoryResponseStatus != 200 {
-		http.Error(*w, fmt.Sprintf("Got HTTP status %d when retrieving student assignment repository", getRepositoryResponseStatus), http.StatusInternalServerError)
+		http.Error(*w, fmt.Sprintf("Got HTTP status %d when retrieving student assignment repository", *getRepositoryResponseStatus), http.StatusInternalServerError)
 		return
 	}
 
@@ -1148,7 +1173,7 @@ func acceptAssignment(
 	studentNeedsInvite := false
 	if *matchingConfig.AcceptGeneratesInvite {
 		// Check if student is already collaborator
-		getCollaboratorResponseStatus, _, err :=
+		getCollaboratorResponseStatus, err :=
 			githubRestRequest[NoBody, NoBody](
 				fmt.Sprintf(
 					"https://api.github.com/repos/%s/%s/collaborators/%s",
@@ -1160,9 +1185,11 @@ func acceptAssignment(
 				&userAccessToken,
 				nil,
 				nil,
+				nil,
 			)
 		
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to get collaborator status", http.StatusInternalServerError)
 			return
 		}
@@ -1171,7 +1198,7 @@ func acceptAssignment(
 			// User is not a collaborator. Record that we may need to add them
 			studentNeedsInvite = true
 		} else if *getCollaboratorResponseStatus != 204 {
-			http.Error(*w, fmt.Sprintf("Got HTTP status %d when retrieving collaborator status", getCollaboratorResponseStatus), http.StatusInternalServerError)
+			http.Error(*w, fmt.Sprintf("Got HTTP status %d when retrieving collaborator status", *getCollaboratorResponseStatus), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -1189,7 +1216,8 @@ func acceptAssignment(
 			type GetRepoVariableResponse struct {
 				Value string `json:"value"`
 			}
-			getRepoVariableResponseStatus, getRepoVariableResponse, err :=
+			var getRepoVariableResponse GetRepoVariableResponse
+			getRepoVariableResponseStatus, err :=
 				githubRestRequest[NoBody, GetRepoVariableResponse](
 					fmt.Sprintf(
 						"https://api.github.com/repos/%s/%s/actions/variables/STUDENT_ID",
@@ -1200,9 +1228,11 @@ func acceptAssignment(
 					assignmentCreationAppIAT,
 					nil,
 					nil,
+					&getRepoVariableResponse,
 				)
 			
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to get STUDENT_ID repository variable", http.StatusInternalServerError)
 				return
 			}
@@ -1214,14 +1244,14 @@ func acceptAssignment(
 		}
 		
 		// If STUDENT_ID doesn't already exist, create it
-		if studentId != "" {
+		if studentId == "" {
 			studentId = authenticatedStudentId
 			
 			type CreateRepoVariableRequest struct {
 				Name string `json:"name"`
 				Value string `json:"value"`
 			}
-			createRepoVariableResponseStatus, _, err :=
+			createRepoVariableResponseStatus, err :=
 				githubRestRequest[CreateRepoVariableRequest, NoBody](
 					fmt.Sprintf(
 						"https://api.github.com/repos/%s/%s/actions/variables",
@@ -1235,15 +1265,17 @@ func acceptAssignment(
 						Name: "STUDENT_ID",
 						Value: authenticatedStudentId,
 					},
+					nil,
 				)
 			
 			if err != nil {
+				log.Println(err)
 				http.Error(*w, "Failed to create STUDENT_ID repository variable", http.StatusInternalServerError)
 				return
 			}
 
 			if *createRepoVariableResponseStatus != 201 {
-				http.Error(*w, fmt.Sprintf("Got HTTP status %s when creating STUDENT_ID repository variable", createRepoVariableResponseStatus), http.StatusInternalServerError)
+				http.Error(*w, fmt.Sprintf("Got HTTP status %d when creating STUDENT_ID repository variable", *createRepoVariableResponseStatus), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -1272,7 +1304,7 @@ func acceptAssignment(
 		type AddCollaboratorRequest struct {
 			Permission string `json:"permission"`
 		}
-		addCollaboratorResponseStatus, _, err :=
+		addCollaboratorResponseStatus, err :=
 			githubRestRequest[AddCollaboratorRequest, NoBody](
 				fmt.Sprintf(
 					"https://api.github.com/repos/%s/%s/collaborators/%s",
@@ -1286,9 +1318,11 @@ func acceptAssignment(
 				&AddCollaboratorRequest {
 					Permission: *matchingConfig.StudentRole,
 				},
+				nil,
 			)
 		
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to add student as collaborator", http.StatusInternalServerError)
 			return
 		}
@@ -1296,7 +1330,7 @@ func acceptAssignment(
 		if *addCollaboratorResponseStatus != 204 && *addCollaboratorResponseStatus != 201 {
 			// 204 means student was added as collaborator, no invite needed.
 			// 201 means an invite was sent. Anything else is an error.
-			http.Error(*w, fmt.Sprintf("Got HTTP status %d when adding student as collaborator", addCollaboratorResponseStatus), http.StatusInternalServerError)
+			http.Error(*w, fmt.Sprintf("Got HTTP status %d when adding student as collaborator", *addCollaboratorResponseStatus), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -1324,6 +1358,7 @@ func acceptAssignment(
 			classroomConfiguration.RepositoryAccessTokenPermissions,
 		)
 		if err != nil {
+			log.Println(err)
 			http.Error(*w, "Failed to create repository access token", http.StatusInternalServerError)
 			return
 		}
@@ -1345,8 +1380,9 @@ func acceptAssignment(
 	json.NewEncoder(*w).Encode(successResult)
 }
 
-
-var globalIATProvider InstallationAccessTokenProvider
+var globalIATProvider InstallationAccessTokenProvider = InstallationAccessTokenProvider {
+	iatMap: make(map[string]IAT),
+}
 
 func CreateContext() Context {
 	classroomsUsername, exists := os.LookupEnv("CLASSROOMS_USERNAME")
@@ -1422,12 +1458,14 @@ func Backend(w http.ResponseWriter, r *http.Request) {
 	// Create directory for git operations
 	dirname, err := randomDirname(32)
 	if err != nil {
+		log.Println(err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	dirpath := fmt.Sprintf("/tmp/%s", *dirname)
 	err = os.Mkdir(dirpath, 0755)
 	if err != nil {
+		log.Println(err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
