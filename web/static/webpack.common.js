@@ -19,7 +19,7 @@ htmlPlugins = [
   })
 ];
 
-non_index_pages = [];
+non_index_pages = ['cloud-function'];
 non_index_pages.forEach((page) => {
   entries[page] = [
     baseCSS,

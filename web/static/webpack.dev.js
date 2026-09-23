@@ -21,10 +21,6 @@ module.exports = merge(common, {
   },
   plugins: [
     new webpack.NormalModuleReplacementPlugin(
-        /^@\/config\/secret-workflow-dispatch-app-private-key\.pem$/,
-        path.resolve(__dirname, 'src/config/secret-workflow-dispatch-app-private-key.dev.pem')
-    ),
-    new webpack.NormalModuleReplacementPlugin(
         /^@\/config\/conf\.yaml$/,
         path.resolve(__dirname, 'src/config/conf.dev.yaml')
     ),
