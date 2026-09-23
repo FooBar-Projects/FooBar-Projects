@@ -599,15 +599,12 @@ fi
 
 if [[ "$student_needs_repo_access_token" == 1 ]]
 then
-    echo "Generating repo access token" # TODO remove
     if [[ "$repo_access_token_permissions_json" != "" ]]
     then
         repo_access_token=$(node repo/workflow-util/getrepoaccesstoken.js -r "$STUDENT_ASSIGNMENT_REPO" -p "$repo_access_token_permissions_json")
     else
         repo_access_token=$(node repo/workflow-util/getrepoaccesstoken.js -r "$STUDENT_ASSIGNMENT_REPO")
     fi
-else
-    echo "Not generating repo access token" # TODO remove
 fi
 
 # Store result
@@ -624,7 +621,6 @@ then
 fi
 if [[ "$repo_access_token" != "" ]]
 then
-    echo "Adding in repo access token" # TODO remove
     if [[ "$needs_commas" == 1 ]]
     then
         echo -n ',' >> result/data.json
