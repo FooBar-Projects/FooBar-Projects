@@ -364,7 +364,7 @@ func acceptAssignment(
 	// Get user's GitHub username
 	type GetUserResponse struct {
 		Login string `json:"login"`
-		Id string `json:"id"`
+		Id int `json:"id"`
 	}
 	getUserResponseStatus, getUserResponse, err :=
 		githubRestRequest[NoBody, GetUserResponse](
