@@ -384,7 +384,7 @@ func acceptAssignment(
 		(*w).Header().Set("Content-Type", "application/json; charset=utf-8")
 		(*w).WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(*w).Encode(AcceptAssignmentHTTPResult{
-			Status: "bad-token",
+			Status: "bad-auth",
 		})
 		return
 	} else if *getUserResponseStatus != 200 {
@@ -511,7 +511,7 @@ func acceptAssignment(
 		(*w).Header().Set("Content-Type", "application/json; charset=utf-8")
 		(*w).WriteHeader(http.StatusNotFound)
 		json.NewEncoder(*w).Encode(AcceptAssignmentHTTPResult{
-			Status: "assignment-not-found",
+			Status: "unknown-assignment",
 		})
 		return
 	}
@@ -995,6 +995,7 @@ func acceptAssignment(
 	// Assignment can be accepted.
 
 	// Check if student assignment repository already exists.
+	repoFreshlyCreated := false
 	getRepositoryResponseStatus, _, err :=
 		githubRestRequest[NoBody, NoBody](
 			fmt.Sprintf(
@@ -1054,6 +1055,8 @@ func acceptAssignment(
 			http.Error(*w, fmt.Sprintf("Got HTTP status %d when generating assignment repository", createRepoResponseStatus), http.StatusInternalServerError)
 			return
 		}
+
+		repoFreshlyCreated = true
 
 		// If assignment template exists, then create local student
 		// assignment clone and push contents to remote repo
@@ -1176,34 +1179,42 @@ func acceptAssignment(
 	// If student needs any form of assignment access, before we can grant
 	// it to them, we first have to check if this repo was previously
 	// created and registered under a different student's ID. Get
-	// STUDENT_ID repository variable if it exists
+	// STUDENT_ID repository variable, or create it if it doesn't exist
 	if studentNeedsInvite || *matchingConfig.AcceptGeneratesRepositoryAccessToken {
-		type GetRepoVariableResponse struct {
-			Value string `json:"value"`
-		}
-		getRepoVariableResponseStatus, getRepoVariableResponse, err :=
-			githubRestRequest[NoBody, GetRepoVariableResponse](
-				fmt.Sprintf(
-					"https://api.github.com/repos/%s/%s/actions/variables/STUDENT_ID",
-					ctx.StudentAssignmentOrganization,
-					studentAssignmentRepository,
-				),
-				"GET",
-				assignmentCreationAppIAT,
-				nil,
-				nil,
-			)
-		
-		if err != nil {
-			http.Error(*w, "Failed to get STUDENT_ID repository variable", http.StatusInternalServerError)
-			return
-		}
-
 		var studentId string
-		if *getRepoVariableResponseStatus == 200 {
-			studentId = getRepoVariableResponse.Value
-		} else {
-			// Variable doesn't exist. Create it
+		
+		// If repo wasn't just freshly created, check if it already
+		// has STUDENT_ID variable
+		if !repoFreshlyCreated {
+			type GetRepoVariableResponse struct {
+				Value string `json:"value"`
+			}
+			getRepoVariableResponseStatus, getRepoVariableResponse, err :=
+				githubRestRequest[NoBody, GetRepoVariableResponse](
+					fmt.Sprintf(
+						"https://api.github.com/repos/%s/%s/actions/variables/STUDENT_ID",
+						ctx.StudentAssignmentOrganization,
+						studentAssignmentRepository,
+					),
+					"GET",
+					assignmentCreationAppIAT,
+					nil,
+					nil,
+				)
+			
+			if err != nil {
+				http.Error(*w, "Failed to get STUDENT_ID repository variable", http.StatusInternalServerError)
+				return
+			}
+
+			if *getRepoVariableResponseStatus == 200 {
+				// STUDENT_ID variable already exists. Store it.
+				studentId = getRepoVariableResponse.Value
+			}
+		}
+		
+		// If STUDENT_ID doesn't already exist, create it
+		if studentId != "" {
 			studentId = authenticatedStudentId
 			
 			type CreateRepoVariableRequest struct {
