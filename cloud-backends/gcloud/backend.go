@@ -22,6 +22,7 @@ import (
 	gitClient "github.com/go-git/go-git/v6/plumbing/client"
 	gitHttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	gitObject "github.com/go-git/go-git/v6/plumbing/object"
+	gitConfig "github.com/go-git/go-git/v6/config"
 	"gopkg.in/yaml.v3"
 	"github.com/golang-jwt/jwt/v5"
 	cp "github.com/otiai10/copy"
@@ -1076,96 +1077,104 @@ func acceptAssignment(
 
 		repoFreshlyCreated = true
 
-		// If assignment template exists, then create local student
-		// assignment clone and push contents to remote repo
-		if assignmentTemplateExists {
-			// Clone remote repo
-			cloneResult, err := git.PlainClone(
-				filepath.Join(workdir, studentAssignmentRepository),
-				&git.CloneOptions{
-					URL: fmt.Sprintf(
-						"https://%s/%s/%s.git",
-						ctx.StudentPlatformGitHostname,
-						ctx.StudentAssignmentOrganization,
-						studentAssignmentRepository,
-					),
-					Progress: os.Stdout,
-					ClientOptions: []gitClient.Option{
-						gitClient.WithHTTPAuth(&gitHttp.BasicAuth{
-							Username: ctx.AssignmentCreationUsername,
-							Password: *assignmentCreationAppIAT,
-						}),
-					},
-				},
-			)
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to clone student assignment repository", http.StatusInternalServerError)
-				return
-			}
-			defer cloneResult.Close()
-
-			// Copy template files
-			err = cp.Copy(
-				filepath.Join(
-					workdir,
-					"classrooms-repo/assignments",
-					assignmentName,
-				),
-				filepath.Join(workdir, studentAssignmentRepository),
-			)
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to copy assignment template into local student repository", http.StatusInternalServerError)
-				return
-			}
-		
-			// Stage all files, commit, and push
-			repository, err := git.PlainOpen(filepath.Join(workdir, studentAssignmentRepository))
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to open local student assignment Git repository", http.StatusInternalServerError)
-				return
-			}
-			defer repository.Close()
-
-			worktree, err := repository.Worktree()
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to open local student assignment Git repository", http.StatusInternalServerError)
-				return
-			}
-
-			_, err = worktree.Add(".")
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to stage copied template files", http.StatusInternalServerError)
-				return
-			}
-
-			_, err = worktree.Commit("Classroom Robot: Instantiate assignment", &git.CommitOptions{
-				Author: &gitObject.Signature{
-					Name:  "Classroom Robot",
-					Email: "<>",
-					When:  time.Now(),
-				},
-			})
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to create commit with assignment template contents", http.StatusInternalServerError)
-				return
-			}
-
-			err = repository.Push(&git.PushOptions{})
-			if err != nil {
-				log.Println(err)
-				http.Error(*w, "Failed to push assignment template contents", http.StatusInternalServerError)
-				return
-			}
-		}
 	} else if *getRepositoryResponseStatus != 200 {
 		http.Error(*w, fmt.Sprintf("Got HTTP status %d when retrieving student assignment repository", *getRepositoryResponseStatus), http.StatusInternalServerError)
 		return
+	}
+
+	// If assignment template exists, then create local student
+	// assignment repo and attempt to push contents to remote repo
+	// (fails silently if remote repo already has commits)
+	if assignmentTemplateExists {
+		// Init local repo
+		repo, err := git.PlainInit(
+			filepath.Join(workdir, studentAssignmentRepository),
+			false,
+		)
+		if err != nil {
+			http.Error(*w, fmt.Sprintf("Failed to init local student git repo: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Map remote origin
+		_, err = repo.CreateRemote(&gitConfig.RemoteConfig{
+			Name: "origin",
+			URLs: []string{
+				fmt.Sprintf(
+					"https://%s/%s/%s.git",
+					ctx.StudentPlatformGitHostname,
+					ctx.StudentAssignmentOrganization,
+					studentAssignmentRepository,
+				),
+			},
+		})
+		if err != nil {
+			http.Error(*w, fmt.Sprintf("Failed to map origin remote for local student repo: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Copy template files
+		err = cp.Copy(
+			filepath.Join(
+				workdir,
+				"classrooms-repo/assignments",
+				assignmentName,
+			),
+			filepath.Join(workdir, studentAssignmentRepository),
+		)
+		if err != nil {
+			log.Println(err)
+			http.Error(*w, "Failed to copy assignment template into local student repository", http.StatusInternalServerError)
+			return
+		}
+	
+		// Stage all files, commit, and push
+		worktree, err := repo.Worktree()
+		if err != nil {
+			log.Println(err)
+			http.Error(*w, "Failed to open local student assignment Git repository", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = worktree.Add(".")
+		if err != nil {
+			log.Println(err)
+			http.Error(*w, "Failed to stage copied template files", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = worktree.Commit("Classroom Robot: Instantiate assignment", &git.CommitOptions{
+			Author: &gitObject.Signature{
+				Name:  "Classroom Robot",
+				Email: "<>",
+				When:  time.Now(),
+			},
+		})
+		if err != nil {
+			log.Println(err)
+			http.Error(*w, "Failed to create commit with assignment template contents", http.StatusInternalServerError)
+			return
+		}
+
+		err = repo.Push(&git.PushOptions{
+			RemoteName: "origin",
+			ClientOptions: []gitClient.Option{
+				gitClient.WithHTTPAuth(&gitHttp.BasicAuth{
+					Username: ctx.AssignmentCreationUsername,
+					Password: *assignmentCreationAppIAT,
+				}),
+			},
+		})
+
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "non-fast-forward update") {
+				// Handle non-fast-forward error safely here
+				log.Printf("Non-fast-forward update. Silent non-error") // TODO remove after testing
+			} else {
+				http.Error(*w, fmt.Sprintf("Unexpected error when pushing template contents to student repository: %s", err), http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
 	// Determine what sort of access student needs (invite, repo access token,

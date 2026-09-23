@@ -30,3 +30,9 @@ gcloud functions deploy foobar-projects-backend \
   --env-vars-file=env.yaml \
   --memory=2Gi \
   --cpu=1
+
+res=$?
+if [[ "$res" != 0 ]]
+then
+	exit "$res"
+fi
