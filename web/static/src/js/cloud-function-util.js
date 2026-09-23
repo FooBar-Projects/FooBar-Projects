@@ -36,7 +36,11 @@ export async function acceptAssignmentViaCloudFunction(acceptAssignmentRequestIn
     const acceptAssignmentResponse = await fetch(
         cloudFunctionEndpoint,
         {
-            method: 'POST'
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(acceptAssignmentRequestInputs)
         }
     );
 
